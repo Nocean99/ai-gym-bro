@@ -7,6 +7,7 @@ import random
 import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # Load environment variables
 load_dotenv()
@@ -43,11 +44,11 @@ GYM_MEMES = [
 # Database connection
 def get_db_connection():
     return psycopg2.connect(
-        dbname=os.getenv('DB_NAME', 'workout_tracker'),
-        user=os.getenv('DB_USER', 'noah'),
-        password=os.getenv('DB_PASSWORD', ''),
-        host=os.getenv('DB_HOST', 'localhost'),
-        port=os.getenv('DB_PORT', '5432')
+        dbname="workout_tracker",
+        user="postgres",
+        password="@Nocean99",  # Your password
+        host="localhost",
+        port="5432"
     )
 
 def get_workout_data(user_id, exercise_name=None, days_back=30):
@@ -104,20 +105,27 @@ def check_leg_day_skipping(user_id):
     cur = conn.cursor()
     
     try:
+        # Convert user_id to int explicitly
+        user_id = int(user_id)
+        
         cur.execute("""
             SELECT MAX(w.date) as last_leg_day,
                    CURRENT_DATE - MAX(w.date) as days_since
             FROM exercises e
             JOIN workouts w ON e.workout_id = w.id
-            WHERE (e.exercise_name ILIKE '%squat%' 
-               OR e.exercise_name ILIKE '%leg%'
-               OR e.exercise_name ILIKE '%deadlift%')
+            WHERE (e.exercise_name ILIKE %s 
+               OR e.exercise_name ILIKE %s
+               OR e.exercise_name ILIKE %s)
               AND w.user_id = %s
-        """, (user_id,))
+        """, ('%squat%', '%leg%', '%deadlift%', user_id))
         
         result = cur.fetchone()
-        if result and result[1]:
+        if result and result[0] is not None:
             return result[1]
+        return None
+    
+    except Exception as e:
+        print(f"Error in check_leg_day_skipping: {e}")
         return None
     
     finally:
@@ -164,31 +172,33 @@ def compare_performance(user_id, current_workout):
         'is_pr': current_weight > prev_weight and current_reps >= prev_reps
     }
 
-def classify_user_intent(user_input):
-    """Determine if user is logging a workout or asking a question"""
+def classify_and_parse(user_input):
+    """Classify intent AND parse workout data OR chart request"""
     try:
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
-                    "content": """Classify the user's intent as either 'LOG_WORKOUT' or 'ASK_QUESTION'.
-                    
-                    LOG_WORKOUT examples:
-                    - "did 3x12 bench at 225"
-                    - "just finished squats 315 for 5"
-                    - "ran 5k in 30 minutes"
-                    
-                    ASK_QUESTION examples:
-                    - "what should I bench today?"
-                    - "how much did I squat last week?"
-                    - "when was my last leg day?"
-                    
-                    Return ONLY a JSON object with:
+                    "content": """You are a workout assistant that classifies user intent.
+
+                    Classify as:
+                    - LOG_WORKOUT: "did 3x12 bench at 225"
+                    - ASK_QUESTION: "what should I bench today?"
+                    - CHART_REQUEST: "show me a chart of my bench press progress"
+
+                    For CHART_REQUEST, extract:
+                    - exercise name (if specified)
+                    - time period: "week", "month", "all" (default to "month" if not specified)
+
+                    Return JSON:
                     {
-                        "intent": "LOG_WORKOUT" or "ASK_QUESTION",
-                        "exercise": "name of exercise if mentioned, else null",
-                        "confidence": 0.0 to 1.0
+                        "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "CHART_REQUEST",
+                        "workout_data": [...],  // if LOG_WORKOUT
+                        "chart_request": {      // if CHART_REQUEST
+                            "exercise": "Bench Press",
+                            "period": "month"
+                        }
                     }"""
                 },
                 {
@@ -198,54 +208,16 @@ def classify_user_intent(user_input):
             ],
             temperature=0
         )
-        
+
         result = json.loads(response.choices[0].message.content)
         return result
-    
-    except Exception as e:
-        return {"intent": "ASK_QUESTION", "exercise": None, "confidence": 0.5}
 
-def parse_workout(description):
-    """Parse natural language workout into structured data"""
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are a workout parser. Extract structured data from workout descriptions.
-                    Return ONLY valid JSON with these fields:
-                    - exercise: name of the exercise (REQUIRED)
-                    - sets: number of sets
-                    - reps: number of reps
-                    - weight: weight used
-                    - unit: "lbs" or "kg" (default to lbs)
-                    - duration: duration in minutes
-                    - distance: distance covered
-                    - notes: any additional info
-                    
-                    Return as a single object or array of objects if multiple exercises."""
-                },
-                {
-                    "role": "user",
-                    "content": description
-                }
-            ],
-            temperature=0
-        )
-        
-        result = response.choices[0].message.content
-        parsed = json.loads(result)
-        
-        if isinstance(parsed, dict):
-            return [parsed]
-        return parsed
-    
     except Exception as e:
-        return None
+        print(f"Error in classify_and_parse: {e}")
+        return {"intent": "ASK_QUESTION", "workout_data": None}
 
 def save_workout(user_id, exercises_data):
-    """Save workout and exercises to database"""
+    """Save workout and exercises to database, return workout_id and exercise details"""
     conn = get_db_connection()
     cur = conn.cursor()
     
@@ -256,6 +228,7 @@ def save_workout(user_id, exercises_data):
         )
         workout_id = cur.fetchone()[0]
         
+        logged_exercises = []
         for exercise in exercises_data:
             if not exercise.get('exercise'):
                 continue
@@ -264,6 +237,7 @@ def save_workout(user_id, exercises_data):
                 INSERT INTO exercises 
                 (workout_id, exercise_name, sets, reps, weight, unit, duration, distance, notes)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, exercise_name, sets, reps, weight, unit
             """, (
                 workout_id,
                 exercise.get('exercise'),
@@ -275,17 +249,71 @@ def save_workout(user_id, exercises_data):
                 exercise.get('distance'),
                 exercise.get('notes')
             ))
+            
+            # Capture the returned exercise data
+            result = cur.fetchone()
+            logged_exercises.append({
+                'id': result[0],
+                'exercise': result[1],
+                'sets': result[2],
+                'reps': result[3],
+                'weight': float(result[4]) if result[4] else None,
+                'unit': result[5]
+            })
         
         conn.commit()
-        return workout_id
+        return workout_id, logged_exercises
     
     except Exception as e:
         conn.rollback()
-        return None
+        print(f"Error saving workout: {e}")
+        return None, []
     
     finally:
         cur.close()
         conn.close()
+
+def generate_chart_data(user_id, exercise_name, days_back=30):
+    """Get workout data formatted for charts"""
+    workout_data = get_workout_data(user_id, exercise_name, days_back)
+
+    if not workout_data:
+        return None
+
+    chart_data = []
+    seen_dates = {}
+
+    for entry in workout_data:
+        date = entry['date']
+        weight = entry['weight']
+        reps = entry['reps']
+        sets = entry.get('sets', 1)
+
+        volume = (weight or 0) * (reps or 0) * sets
+
+        if date not in seen_dates:
+            seen_dates[date] = {
+                'date': date,
+                'max_weight': weight or 0,
+                'total_reps': reps or 0,
+                'total_volume': volume,
+                'sets': sets
+            }
+        else:
+            if weight and weight > seen_dates[date]['max_weight']:
+                seen_dates[date]['max_weight'] = weight
+            seen_dates[date]['total_reps'] += (reps or 0)
+            seen_dates[date]['total_volume'] += volume
+            seen_dates[date]['sets'] += sets
+
+    chart_data = list(seen_dates.values())
+    chart_data.sort(key=lambda x: x['date'], reverse=True)
+
+    return {
+        'exercise': exercise_name,
+        'data_points': chart_data,
+        'chart_type': 'line'
+    }
 
 def get_celebration_response(workout_data, performance_comparison=None):
     """Get a gym bro celebration with performance analysis"""
@@ -318,7 +346,7 @@ def get_celebration_response(workout_data, performance_comparison=None):
             gym_meme = f" {random.choice(GYM_MEMES)}"
         
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
@@ -345,8 +373,11 @@ def get_celebration_response(workout_data, performance_comparison=None):
 
 def answer_workout_question(user_id, question):
     """Use AI to answer questions about workout history"""
-    intent = classify_user_intent(question)
-    exercise = intent.get('exercise')
+    intent_data = classify_and_parse(question)
+    workout_data = intent_data.get('workout_data')
+    exercise = None
+    if isinstance(workout_data, list) and workout_data:
+        exercise = workout_data[0].get('exercise')
     
     days_since_legs = check_leg_day_skipping(user_id)
     leg_day_warning = ""
@@ -369,7 +400,7 @@ def answer_workout_question(user_id, question):
     
     try:
         response = client.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
@@ -395,6 +426,101 @@ def answer_workout_question(user_id, question):
         return "Had trouble with that one, bro! 💪"
 
 # ============================================
+# AUTHENTICATION ENDPOINTS
+# ============================================
+
+@app.route('/register', methods=['POST'])
+def register():
+    """Register a new user"""
+    try:
+        data = request.json
+        username = data.get('username', '').strip().lower()
+        password = data.get('password', '')
+        
+        if not username or not password:
+            return jsonify({"error": "Username and password required"}), 400
+        
+        if len(password) < 6:
+            return jsonify({"error": "Password must be at least 6 characters, bro!"}), 400
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Check if username exists
+        cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Username already taken, bro! Try another."}), 400
+        
+        # Create user
+        password_hash = generate_password_hash(password)
+        cur.execute(
+            "INSERT INTO users (username, password_hash) VALUES (%s, %s) RETURNING id",
+            (username, password_hash)
+        )
+        user_id = cur.fetchone()[0]
+        conn.commit()
+        
+        cur.close()
+        conn.close()
+        
+        return jsonify({
+            "success": True,
+            "user_id": user_id,
+            "username": username,
+            "message": "Account created! Let's get huge! 💪"
+        })
+    
+    except Exception as e:
+        print(f"Registration error: {e}")
+        return jsonify({"error": "Something went wrong, bro!"}), 500
+
+
+@app.route('/login', methods=['POST'])
+def login():
+    """Login user"""
+    try:
+        data = request.json
+        username = data.get('username', '').strip().lower()
+        password = data.get('password', '')
+        
+        if not username or not password:
+            return jsonify({"error": "Username and password required"}), 400
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute(
+            "SELECT id, password_hash FROM users WHERE username = %s",
+            (username,)
+        )
+        result = cur.fetchone()
+        
+        cur.close()
+        conn.close()
+        
+        if not result:
+            return jsonify({"error": "Invalid username or password"}), 401
+        
+        user_id, password_hash = result
+        
+        if not check_password_hash(password_hash, password):
+            return jsonify({"error": "Invalid username or password"}), 401
+        
+        return jsonify({
+            "success": True,
+            "user_id": user_id,
+            "username": username,
+            "message": "Welcome back, bro! 💪"
+        })
+    
+    except Exception as e:
+        print(f"Login error: {e}")
+        return jsonify({"error": "Something went wrong!"}), 500
+
+
+# ============================================
 # API ENDPOINTS
 # ============================================
 
@@ -409,20 +535,19 @@ def chat():
     try:
         data = request.json
         user_message = data.get('message', '')
-        user_id = data.get('user_id', 1)  # Default to user 1 for now
+        user_id = data.get('user_id', 1)
         
         if not user_message:
             return jsonify({"error": "No message provided"}), 400
         
-        # Classify intent
-        intent_data = classify_user_intent(user_message)
-        intent = intent_data['intent']
+        # NEW: Classify AND parse in one call
+        result = classify_and_parse(user_message)
+        intent = result['intent']
         
         if intent == 'LOG_WORKOUT':
-            # Parse workout
-            parsed = parse_workout(user_message)
+            parsed = result['workout_data']
             
-            if not parsed:
+            if not parsed or len(parsed) == 0:
                 return jsonify({
                     "type": "error",
                     "message": "Didn't quite catch that, bro. Try again?"
@@ -431,8 +556,8 @@ def chat():
             # Compare performance before saving
             performance = compare_performance(user_id, parsed)
             
-            # Save workout
-            workout_id = save_workout(user_id, parsed)
+            # Save workout - returns workout_id AND logged exercises
+            workout_id, logged_exercises = save_workout(user_id, parsed)
             
             if not workout_id:
                 return jsonify({
@@ -440,7 +565,7 @@ def chat():
                     "message": "Had trouble saving that. Try again?"
                 })
             
-            # Get celebration
+            # Get celebration (with performance context!)
             celebration = get_celebration_response(parsed, performance)
             
             # Add Arnold quote for PRs
@@ -452,8 +577,42 @@ def chat():
                 "type": "workout_logged",
                 "message": celebration + arnold,
                 "workout_id": workout_id,
+                "logged_sets": logged_exercises,
                 "performance": performance
             })
+        
+        elif intent == 'CHART_REQUEST':
+            chart_req = result.get('chart_request', {})
+            exercise = chart_req.get('exercise')
+            period = chart_req.get('period', 'month')
+            
+            if not exercise:
+                return jsonify({
+                    "type": "answer",
+                    "message": "Which exercise do you want to see a chart for, bro?"
+                })
+            
+            days_map = {
+                'week': 7,
+                'month': 30,
+                'year': 365,
+                'all': 3650
+            }
+            days_back = days_map.get(period, 30)
+            
+            chart_data = generate_chart_data(user_id, exercise, days_back)
+            
+            if chart_data:
+                return jsonify({
+                    "type": "chart",
+                    "message": f"Here's your {exercise} progress over the last {period}! 💪",
+                    "chart_data": chart_data
+                })
+            else:
+                return jsonify({
+                    "type": "answer",
+                    "message": f"Bro, I don't have any data for {exercise} yet. Log some workouts first! 💪"
+                })
         
         else:  # ASK_QUESTION
             answer = answer_workout_question(user_id, user_message)
@@ -464,9 +623,68 @@ def chat():
             })
     
     except Exception as e:
+        print("\n" + "="*60)
+        print("❌ ERROR in /chat endpoint:")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        print("="*60)
+        import traceback
+        traceback.print_exc()
+        print("="*60 + "\n")
         return jsonify({
             "type": "error",
             "message": f"Something went wrong, bro! {str(e)}"
+        }), 500
+
+@app.route('/delete-set', methods=['DELETE'])
+def delete_set():
+    """Delete a specific exercise set"""
+    try:
+        data = request.json
+        set_id = data.get('set_id')
+        user_id = data.get('user_id')
+        
+        if not set_id or not user_id:
+            return jsonify({
+                "success": False,
+                "error": "Missing set_id or user_id"
+            }), 400
+        
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Security: verify the set belongs to this user before deleting
+        cur.execute("""
+            DELETE FROM exercises 
+            WHERE id = %s 
+            AND workout_id IN (
+                SELECT id FROM workouts WHERE user_id = %s
+            )
+            RETURNING id
+        """, (set_id, user_id))
+        
+        deleted = cur.fetchone()
+        conn.commit()
+        
+        cur.close()
+        conn.close()
+        
+        if deleted:
+            return jsonify({
+                "success": True,
+                "deleted_id": set_id,
+                "message": "Set deleted successfully! 🗑️"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Set not found or unauthorized"
+            }), 404
+    
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
         }), 500
 
 @app.route('/history', methods=['GET'])
@@ -496,9 +714,12 @@ if __name__ == '__main__':
     print("=" * 60)
     print("\nAPI is running on http://localhost:5001")
     print("\nEndpoints:")
-    print("  POST /chat - Main chat endpoint")
-    print("  GET  /history - Get workout history")
-    print("  GET  /health - Health check")
+    print("  POST   /register - Register new user")
+    print("  POST   /login - Login user")
+    print("  POST   /chat - Main chat endpoint")
+    print("  DELETE /delete-set - Delete a specific exercise set")
+    print("  GET    /history - Get workout history")
+    print("  GET    /health - Health check")
     print("\n" + "=" * 60 + "\n")
     
     app.run(debug=True, host='0.0.0.0', port=5001)
