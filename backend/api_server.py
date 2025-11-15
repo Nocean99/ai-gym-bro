@@ -43,13 +43,21 @@ GYM_MEMES = [
 
 # Database connection
 def get_db_connection():
-    return psycopg2.connect(
-        dbname=os.getenv('DB_NAME', 'workout_tracker'),
-        user=os.getenv('DB_USER', 'postgres'),
-        password=os.getenv('DB_PASSWORD', ''),
-        host=os.getenv('DB_HOST', 'localhost'),
-        port=os.getenv('DB_PORT', '5432')
-    )
+    # Render provides DATABASE_URL, use that if available
+    database_url = os.getenv('DATABASE_URL')
+
+    if database_url:
+        # Production: Use DATABASE_URL from Render
+        return psycopg2.connect(database_url)
+    else:
+        # Development: Use individual environment variables
+        return psycopg2.connect(
+            dbname=os.getenv('DB_NAME', 'workout_tracker'),
+            user=os.getenv('DB_USER', 'postgres'),
+            password=os.getenv('DB_PASSWORD', ''),
+            host=os.getenv('DB_HOST', 'localhost'),
+            port=os.getenv('DB_PORT', '5432')
+        )
 
 def get_workout_data(user_id, exercise_name=None, days_back=30):
     """Get workout history from database"""
@@ -712,7 +720,13 @@ if __name__ == '__main__':
     print("=" * 60)
     print("🏋️  AI GYM BRO API SERVER")
     print("=" * 60)
-    print("\nAPI is running on http://localhost:5001")
+
+    # Get port from environment variable (Render sets this) or default to 5001
+    port = int(os.getenv('PORT', 5001))
+    debug = os.getenv('DEBUG', 'False').lower() == 'true'
+
+    print(f"\nAPI is running on port {port}")
+    print(f"Debug mode: {debug}")
     print("\nEndpoints:")
     print("  POST   /register - Register new user")
     print("  POST   /login - Login user")
@@ -721,5 +735,5 @@ if __name__ == '__main__':
     print("  GET    /history - Get workout history")
     print("  GET    /health - Health check")
     print("\n" + "=" * 60 + "\n")
-    
-    app.run(debug=True, host='0.0.0.0', port=5001)
+
+    app.run(debug=debug, host='0.0.0.0', port=port)
