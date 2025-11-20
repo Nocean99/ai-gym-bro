@@ -3,9 +3,10 @@ import '../config/api_config.dart';
 import '../models/message.dart';
 import '../services/api_service.dart';
 import '../widgets/workout_recap_card.dart';
-import '../widgets/progress_chart.dart'; // ADD THIS LINE
+import '../widgets/progress_chart.dart';
 import '../services/auth_service.dart';
 import 'login_screen.dart';
+import 'bulk_import_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -154,6 +155,18 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.upload_file, color: Colors.orange),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const BulkImportScreen(),
+                ),
+              );
+            },
+            tooltip: 'Bulk Import',
+          ),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.orange),
             onPressed: () async {
