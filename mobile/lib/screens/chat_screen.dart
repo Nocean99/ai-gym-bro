@@ -156,18 +156,6 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.upload_file, color: Colors.orange),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const BulkImportScreen(),
-                ),
-              );
-            },
-            tooltip: 'Bulk Import',
-          ),
-          IconButton(
             icon: const Icon(Icons.logout, color: Colors.orange),
             onPressed: () async {
               await AuthService().logout();
