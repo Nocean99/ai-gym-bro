@@ -49,6 +49,13 @@ class _BulkImportScreenState extends State<BulkImportScreen> {
       line = line.trim();
       if (line.isEmpty) continue;
 
+      // Check for standalone year (e.g., "2023", "2024")
+      final yearOnlyMatch = RegExp(r'^(\d{4})$').firstMatch(line);
+      if (yearOnlyMatch != null) {
+        currentYear = yearOnlyMatch.group(1);
+        continue;
+      }
+
       // Check for year header (e.g., "2023 – Flat Barbell Bench")
       final yearMatch = RegExp(r'^(\d{4})\s*[–-]\s*(.+)').firstMatch(line);
       if (yearMatch != null) {
@@ -57,47 +64,70 @@ class _BulkImportScreenState extends State<BulkImportScreen> {
         continue;
       }
 
-      // Check for date line (e.g., "Nov 5" or "November 20, 2025")
-      final datePattern = RegExp(r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December)\s+(\d+)(?:,?\s*(\d{4}))?');
+      // Check for date line with optional suffixes (e.g., "Nov 5th", "November 20, 2025", "Jun27tg")
+      final datePattern = RegExp(
+        r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December)\s*(\d+)(?:st|nd|rd|th|tg)?(?:,?\s*(\d{4}))?',
+        caseSensitive: false,
+      );
       final dateMatch = datePattern.firstMatch(line);
 
       if (dateMatch != null) {
-        final monthName = dateMatch.group(1)!;
+        var monthName = dateMatch.group(1)!;
         final day = dateMatch.group(2)!.padLeft(2, '0');
         final year = dateMatch.group(3) ?? currentYear ?? DateTime.now().year.toString();
+
+        // Capitalize first letter for lookup
+        monthName = monthName[0].toUpperCase() + monthName.substring(1).toLowerCase();
+        if (monthName.length > 3) {
+          // Full month name, check mapping
+          final shortMonth = monthName.substring(0, 3);
+          if (months.containsKey(shortMonth)) {
+            monthName = shortMonth;
+          }
+        }
+
+        // Skip invalid dates
+        final dayNum = int.parse(day);
+        if (monthName == 'Jun' && dayNum > 30) continue;
+        if (monthName == 'Feb' && dayNum > 29) continue;
+        if (monthName == 'Apr' && dayNum > 30) continue;
+        if (monthName == 'Sep' && dayNum > 30) continue;
+        if (monthName == 'Nov' && dayNum > 30) continue;
 
         // Get rest of line after date
         final afterDate = line.substring(dateMatch.end).trim();
 
-        // Skip invalid dates
-        if (monthName == 'Jun' && int.parse(day) > 30) continue;
-        if (monthName == 'Feb' && int.parse(day) > 29) continue;
-
         // Build reformatted entry
+        final monthNum = months[monthName] ?? '01';
+        final exercise = currentExercise ?? 'exercise';
+
         if (afterDate.isNotEmpty) {
           // Date has exercise info on same line
-          final monthNum = months[monthName] ?? '01';
-          final exercise = currentExercise ?? 'exercise';
           reformatted.add('On $year-$monthNum-$day, I did $exercise: $afterDate');
         }
         continue;
       }
 
+      // Skip lines that look like notes or PR records without dates
+      if (RegExp(r'^\d+\s*(most recent|pr|max|record)', caseSensitive: false).hasMatch(line)) {
+        continue;
+      }
+
       // Check for exercise name line (standalone)
-      if (line.contains('BENCH') || line.contains('Bench') ||
-          line.contains('SHOULDER') || line.contains('Shoulder') ||
-          line.contains('ROW') || line.contains('Row') ||
-          line.contains('CARDIO') || line.contains('Cardio')) {
+      if (RegExp(r'(bench|press|row|curl|squat|deadlift|cardio|pullup|chinup|dip)', caseSensitive: false).hasMatch(line) &&
+          !line.contains('x') && !line.contains('×') && !RegExp(r'\d+').hasMatch(line)) {
         currentExercise = line.replaceAll(RegExp(r'[🏔️💪🧱🏃]'), '').trim();
         continue;
       }
 
-      // Check for set/rep data starting with * or bullet
-      if (line.startsWith('*') || line.startsWith('•')) {
+      // Check for set/rep data starting with * or bullet or dash
+      if (line.startsWith('*') || line.startsWith('•') || line.startsWith('-')) {
         final data = line.substring(1).trim();
-        if (currentYear != null && currentExercise != null) {
-          // Estimate date (use middle of month if we don't have specific date)
-          reformatted.add('In $currentYear, I did $currentExercise: $data');
+        if (currentYear != null && currentExercise != null && data.isNotEmpty) {
+          // Has workout data
+          if (RegExp(r'\d+').hasMatch(data)) {
+            reformatted.add('In $currentYear, I did $currentExercise: $data');
+          }
         }
       }
     }
