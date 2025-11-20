@@ -27,6 +27,84 @@ class _BulkImportScreenState extends State<BulkImportScreen> {
     super.dispose();
   }
 
+  /// Preprocess text to make it easier for AI to parse
+  String _preprocessText(String text) {
+    final lines = text.split('\n');
+    final reformatted = <String>[];
+
+    String? currentYear;
+    String? currentExercise;
+
+    // Month name to number mapping
+    final months = {
+      'Jan': '01', 'Feb': '02', 'Mar': '03', 'Apr': '04',
+      'May': '05', 'Jun': '06', 'Jul': '07', 'Aug': '08',
+      'Sep': '09', 'Oct': '10', 'Nov': '11', 'Dec': '12',
+      'January': '01', 'February': '02', 'March': '03', 'April': '04',
+      'June': '06', 'July': '07', 'August': '08', 'September': '09',
+      'October': '10', 'November': '11', 'December': '12'
+    };
+
+    for (var line in lines) {
+      line = line.trim();
+      if (line.isEmpty) continue;
+
+      // Check for year header (e.g., "2023 – Flat Barbell Bench")
+      final yearMatch = RegExp(r'^(\d{4})\s*[–-]\s*(.+)').firstMatch(line);
+      if (yearMatch != null) {
+        currentYear = yearMatch.group(1);
+        currentExercise = yearMatch.group(2)?.trim();
+        continue;
+      }
+
+      // Check for date line (e.g., "Nov 5" or "November 20, 2025")
+      final datePattern = RegExp(r'^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|January|February|March|April|June|July|August|September|October|November|December)\s+(\d+)(?:,?\s*(\d{4}))?');
+      final dateMatch = datePattern.firstMatch(line);
+
+      if (dateMatch != null) {
+        final monthName = dateMatch.group(1)!;
+        final day = dateMatch.group(2)!.padLeft(2, '0');
+        final year = dateMatch.group(3) ?? currentYear ?? DateTime.now().year.toString();
+
+        // Get rest of line after date
+        final afterDate = line.substring(dateMatch.end).trim();
+
+        // Skip invalid dates
+        if (monthName == 'Jun' && int.parse(day) > 30) continue;
+        if (monthName == 'Feb' && int.parse(day) > 29) continue;
+
+        // Build reformatted entry
+        if (afterDate.isNotEmpty) {
+          // Date has exercise info on same line
+          final monthNum = months[monthName] ?? '01';
+          final exercise = currentExercise ?? 'exercise';
+          reformatted.add('On $year-$monthNum-$day, I did $exercise: $afterDate');
+        }
+        continue;
+      }
+
+      // Check for exercise name line (standalone)
+      if (line.contains('BENCH') || line.contains('Bench') ||
+          line.contains('SHOULDER') || line.contains('Shoulder') ||
+          line.contains('ROW') || line.contains('Row') ||
+          line.contains('CARDIO') || line.contains('Cardio')) {
+        currentExercise = line.replaceAll(RegExp(r'[🏔️💪🧱🏃]'), '').trim();
+        continue;
+      }
+
+      // Check for set/rep data starting with * or bullet
+      if (line.startsWith('*') || line.startsWith('•')) {
+        final data = line.substring(1).trim();
+        if (currentYear != null && currentExercise != null) {
+          // Estimate date (use middle of month if we don't have specific date)
+          reformatted.add('In $currentYear, I did $currentExercise: $data');
+        }
+      }
+    }
+
+    return reformatted.join('\n\n');
+  }
+
   /// Split text into chunks by date sections
   List<String> _splitIntoChunks(String text) {
     // Split by year headers (e.g., "2023 –", "2024 -")
@@ -123,11 +201,18 @@ class _BulkImportScreenState extends State<BulkImportScreen> {
       _processedChunks = 0;
       _successfulExercises = 0;
       _errors.clear();
+      _statusMessage = 'Reformatting data for AI...';
+    });
+
+    // Preprocess text to make it easier for AI to parse
+    final preprocessed = _preprocessText(text);
+
+    setState(() {
       _statusMessage = 'Splitting data into chunks...';
     });
 
     // Split into chunks
-    final chunks = _splitIntoChunks(text);
+    final chunks = _splitIntoChunks(preprocessed);
     setState(() {
       _totalChunks = chunks.length;
       _statusMessage = 'Processing ${chunks.length} chunks...';
@@ -237,9 +322,18 @@ class _BulkImportScreenState extends State<BulkImportScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Paste your entire workout history below in natural language. '
-                      'The app will automatically split it into smaller chunks and process them one by one.',
+                      'Paste your entire workout history below in your own format. '
+                      'The app will automatically reformat dates, split into chunks, and process them.',
                       style: TextStyle(color: Colors.grey[300], fontSize: 13),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Example format: "2023 – Bench Press\\nNov 5: 225×4, 235×2\\nDec 6: 245×3"',
+                      style: TextStyle(
+                        color: Colors.grey[500],
+                        fontSize: 11,
+                        fontFamily: 'monospace',
+                      ),
                     ),
                     const SizedBox(height: 8),
                     Text(
