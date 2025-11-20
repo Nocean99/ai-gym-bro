@@ -96,9 +96,15 @@ class ProgressChart extends StatelessWidget {
     }
 
     // Add padding to Y axis
-    final yPadding = (maxY - minY) * 0.1;
-    minY = (minY - yPadding).clamp(0, double.infinity);
-    maxY = maxY + yPadding;
+    // Handle edge case where all values are the same
+    if (minY == maxY) {
+      minY = (minY - 10).clamp(0, double.infinity);
+      maxY = maxY + 10;
+    } else {
+      final yPadding = (maxY - minY) * 0.1;
+      minY = (minY - yPadding).clamp(0, double.infinity);
+      maxY = maxY + yPadding;
+    }
 
     return Card(
       margin: const EdgeInsets.all(12),
@@ -137,7 +143,7 @@ class ProgressChart extends StatelessWidget {
                   gridData: FlGridData(
                     show: true,
                     drawVerticalLine: false,
-                    horizontalInterval: (maxY - minY) / 5,
+                    horizontalInterval: (maxY - minY) > 0 ? (maxY - minY) / 5 : 1,
                     getDrawingHorizontalLine: (value) {
                       return FlLine(
                         color: Colors.grey[700],
