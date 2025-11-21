@@ -134,19 +134,14 @@ class _ChatScreenState extends State<ChatScreen> {
       backgroundColor: Colors.grey[900],
       appBar: AppBar(
         backgroundColor: Colors.black,
-        title: Row(
+        title: const Row(
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Image.asset(
-                'assets/logo.png',
-                width: 28,
-                height: 28,
-                fit: BoxFit.cover,
-              ),
+            Text(
+              '💪',
+              style: TextStyle(fontSize: 24),
             ),
-            const SizedBox(width: 8),
-            const Text(
+            SizedBox(width: 8),
+            Text(
               'AI Gym Bro',
               style: TextStyle(
                 color: Colors.orange,
