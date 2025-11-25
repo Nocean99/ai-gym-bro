@@ -9,6 +9,17 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
 
+# Import new modules for conversation memory and workout logic
+from conversation_memory import save_message, get_conversation_history
+from workout_logic import (
+    get_recent_sets,
+    analyze_set_performance,
+    get_recommendation_constraints,
+    get_active_workout_session,
+    start_workout_session,
+    update_session_exercise
+)
+
 # Load environment variables
 load_dotenv()
 
@@ -40,6 +51,37 @@ GYM_MEMES = [
     "Time to get huge!",
     "Abs are made in the kitchen, but built in the gym!",
 ]
+
+# Enhanced System Prompt with Safety Rules
+SAFE_SYSTEM_PROMPT = """You are an experienced strength coach and gym buddy. Your primary responsibility is USER SAFETY.
+
+CRITICAL RULES FOR WEIGHT RECOMMENDATIONS:
+1. ALWAYS analyze set-to-set performance before recommending weight
+2. If reps DECREASE at the same weight → user is fatigued → recommend LIGHTER weight or stopping
+3. NEVER recommend increasing weight when performance is declining
+4. Base all recommendations on DATA from their workout history, not just motivation
+5. When in doubt, err on the side of caution - it's better to be conservative than risk injury
+
+Safety Guidelines:
+- If you receive SAFETY CONSTRAINTS in your prompt, you MUST follow them exactly
+- Performance declining (fewer reps at same weight) = FATIGUE = recommend lighter weight or stop
+- Never let motivation override safety
+- Progressive overload should be gradual (2.5-10 lbs for upper body, 5-15 lbs for lower body)
+- If uncertain, recommend maintaining current weight
+
+Personality:
+- Be encouraging and use gym bro language
+- Celebrate PRs and improvements enthusiastically
+- Give tough love when needed, but always stay supportive
+- Use phrases like "bro", "let's go", "crushing it", but not at the expense of safety
+
+Response Style:
+- Keep responses conversational and concise (2-4 sentences)
+- Use specific numbers and data from their history
+- Explain your reasoning briefly
+- Be honest about performance (good or bad)
+
+Remember: You can still be motivational while being SAFE and REALISTIC."""
 
 # Database connection
 def get_db_connection():
@@ -531,67 +573,100 @@ def health_check():
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    """Main chat endpoint - handles both logging and questions"""
+    """Main chat endpoint - handles both logging and questions with conversation memory"""
     try:
         data = request.json
         user_message = data.get('message', '')
         user_id = data.get('user_id', 1)
-        
+        session_id = data.get('session_id', None)  # Optional workout session ID
+        current_exercise = data.get('current_exercise', None)  # Optional current exercise
+
         if not user_message:
             return jsonify({"error": "No message provided"}), 400
-        
-        # NEW: Classify AND parse in one call
+
+        # === STEP 1: Save user's message to conversation history ===
+        save_message(user_id, 'user', user_message, session_id)
+
+        # === STEP 2: Classify intent ===
         result = classify_and_parse(user_message)
         intent = result['intent']
-        
+
+        # === STEP 3: Handle different intents ===
         if intent == 'LOG_WORKOUT':
             parsed = result['workout_data']
-            
+
             if not parsed or len(parsed) == 0:
+                error_msg = "Didn't quite catch that, bro. Try again?"
+                save_message(user_id, 'assistant', error_msg, session_id)
                 return jsonify({
                     "type": "error",
-                    "message": "Didn't quite catch that, bro. Try again?"
+                    "message": error_msg
                 })
-            
+
+            # Get or create workout session if not provided
+            if not session_id:
+                workout_session = get_active_workout_session(user_id)
+                if workout_session:
+                    session_id = workout_session['session_id']
+                else:
+                    # Start new session with first exercise
+                    exercise_name = parsed[0].get('exercise') if parsed else None
+                    session_id = start_workout_session(user_id, exercise_name)
+
+            # Update current exercise in session
+            if current_exercise or (parsed and parsed[0].get('exercise')):
+                exercise_name = current_exercise or parsed[0].get('exercise')
+                update_session_exercise(session_id, exercise_name)
+
             # Compare performance before saving
             performance = compare_performance(user_id, parsed)
-            
+
             # Save workout - returns workout_id AND logged exercises
             workout_id, logged_exercises = save_workout(user_id, parsed)
-            
+
             if not workout_id:
+                error_msg = "Had trouble saving that. Try again?"
+                save_message(user_id, 'assistant', error_msg, session_id)
                 return jsonify({
                     "type": "error",
-                    "message": "Had trouble saving that. Try again?"
+                    "message": error_msg
                 })
-            
+
             # Get celebration (with performance context!)
             celebration = get_celebration_response(parsed, performance)
-            
+
             # Add Arnold quote for PRs
             arnold = ""
             if performance and performance.get('is_pr'):
                 arnold = f"\n\n💪 Arnold says: \"{random.choice(ARNOLD_QUOTES)}\""
-            
+
+            final_message = celebration + arnold
+
+            # Save assistant response
+            save_message(user_id, 'assistant', final_message, session_id)
+
             return jsonify({
                 "type": "workout_logged",
-                "message": celebration + arnold,
+                "message": final_message,
                 "workout_id": workout_id,
                 "logged_sets": logged_exercises,
-                "performance": performance
+                "performance": performance,
+                "session_id": session_id
             })
-        
+
         elif intent == 'CHART_REQUEST':
             chart_req = result.get('chart_request', {})
             exercise = chart_req.get('exercise')
             period = chart_req.get('period', 'month')
-            
+
             if not exercise:
+                msg = "Which exercise do you want to see a chart for, bro?"
+                save_message(user_id, 'assistant', msg, session_id)
                 return jsonify({
                     "type": "answer",
-                    "message": "Which exercise do you want to see a chart for, bro?"
+                    "message": msg
                 })
-            
+
             days_map = {
                 'week': 7,
                 'month': 30,
@@ -599,29 +674,91 @@ def chat():
                 'all': 3650
             }
             days_back = days_map.get(period, 30)
-            
+
             chart_data = generate_chart_data(user_id, exercise, days_back)
-            
+
             if chart_data:
+                msg = f"Here's your {exercise} progress over the last {period}! 💪"
+                save_message(user_id, 'assistant', msg, session_id)
                 return jsonify({
                     "type": "chart",
-                    "message": f"Here's your {exercise} progress over the last {period}! 💪",
+                    "message": msg,
                     "chart_data": chart_data
                 })
             else:
+                msg = f"Bro, I don't have any data for {exercise} yet. Log some workouts first! 💪"
+                save_message(user_id, 'assistant', msg, session_id)
                 return jsonify({
                     "type": "answer",
-                    "message": f"Bro, I don't have any data for {exercise} yet. Log some workouts first! 💪"
+                    "message": msg
                 })
-        
-        else:  # ASK_QUESTION
-            answer = answer_workout_question(user_id, user_message)
-            
+
+        else:  # ASK_QUESTION - This is where conversation memory and safety logic apply
+            # === STEP 4: Retrieve conversation history ===
+            conversation_history = get_conversation_history(user_id, session_id, limit=20)
+
+            # === STEP 5: Build messages array with system prompt ===
+            messages = [{"role": "system", "content": SAFE_SYSTEM_PROMPT}]
+
+            # === STEP 6: Check if this looks like a weight recommendation request ===
+            weight_keywords = ['what should', 'recommend', 'next set', 'final set', 'weight',
+                             'how much', 'what weight', 'heavier', 'lighter', 'increase', 'decrease']
+            is_weight_question = any(keyword in user_message.lower() for keyword in weight_keywords)
+
+            if is_weight_question:
+                # Try to determine exercise from context
+                exercise_name = current_exercise
+
+                # If no current exercise, try to extract from message or recent history
+                if not exercise_name and conversation_history:
+                    # Simple extraction: look for common exercise names in recent messages
+                    for msg in reversed(conversation_history[-5:]):  # Check last 5 messages
+                        content_lower = msg['content'].lower()
+                        for ex in ['bench', 'squat', 'deadlift', 'press', 'row', 'curl', 'pullup', 'pull up']:
+                            if ex in content_lower:
+                                exercise_name = ex
+                                break
+                        if exercise_name:
+                            break
+
+                # Get recent sets and analyze performance
+                if exercise_name and session_id:
+                    recent_sets = get_recent_sets(user_id, session_id, exercise_name, limit=10)
+
+                    if len(recent_sets) >= 1:
+                        # Analyze performance
+                        analysis = analyze_set_performance(recent_sets)
+                        constraints = get_recommendation_constraints(analysis)
+
+                        if constraints:
+                            # Inject safety constraints into system prompt
+                            enhanced_prompt = f"{SAFE_SYSTEM_PROMPT}\n\n{constraints}\n\nRecent sets for {exercise_name}: {recent_sets}"
+                            messages[0] = {"role": "system", "content": enhanced_prompt}
+
+            # === STEP 7: Add conversation history ===
+            messages.extend(conversation_history)
+
+            # === STEP 8: Add current user message ===
+            messages.append({"role": "user", "content": user_message})
+
+            # === STEP 9: Call OpenAI with LOWER temperature for safety ===
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.2  # Lower temperature = more consistent, safer responses
+            )
+
+            assistant_message = response.choices[0].message.content
+
+            # === STEP 10: Save assistant's response ===
+            save_message(user_id, 'assistant', assistant_message, session_id)
+
             return jsonify({
                 "type": "answer",
-                "message": answer
+                "message": assistant_message,
+                "session_id": session_id
             })
-    
+
     except Exception as e:
         print("\n" + "="*60)
         print("❌ ERROR in /chat endpoint:")
