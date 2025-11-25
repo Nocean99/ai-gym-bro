@@ -87,8 +87,8 @@ Remember: You can still be motivational while being SAFE and REALISTIC."""
 def get_db_connection():
     return psycopg2.connect(
         dbname="workout_tracker",
-        user="postgres",
-        password="@Nocean99",  # Your password
+        user="noah",
+        password="",  # No password for local development
         host="localhost",
         port="5432"
     )
