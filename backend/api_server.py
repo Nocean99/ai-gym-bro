@@ -10,8 +10,8 @@ from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # Import new modules for conversation memory and workout logic
-from conversation_memory import save_message, get_conversation_history
-from workout_logic import (
+from .conversation_memory import save_message, get_conversation_history
+from .workout_logic import (
     get_recent_sets,
     analyze_set_performance,
     get_recommendation_constraints,
