@@ -85,12 +85,19 @@ Remember: You can still be motivational while being SAFE and REALISTIC."""
 
 # Database connection
 def get_db_connection():
+    """Get database connection using environment variables for flexibility"""
+    # Check if DATABASE_URL is provided (used by Render, Heroku, etc.)
+    database_url = os.getenv('DATABASE_URL')
+    if database_url:
+        return psycopg2.connect(database_url)
+
+    # Otherwise use individual environment variables (local development)
     return psycopg2.connect(
-        dbname="workout_tracker",
-        user="noah",
-        password="",  # No password for local development
-        host="localhost",
-        port="5432"
+        dbname=os.getenv('DB_NAME', 'workout_tracker'),
+        user=os.getenv('DB_USER', 'noah'),
+        password=os.getenv('DB_PASSWORD', ''),
+        host=os.getenv('DB_HOST', 'localhost'),
+        port=os.getenv('DB_PORT', '5432')
     )
 
 def get_workout_data(user_id, exercise_name=None, days_back=30):
