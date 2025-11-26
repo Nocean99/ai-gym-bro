@@ -1,8 +1,8 @@
 -- Migration 001: Add conversation memory and workout session tracking
 -- Run this on your database to add conversation history and session tracking
 
--- Connect to database
-\c workout_tracker;
+-- Note: Already connected via connection string, no need to switch databases
+-- \c workout_tracker;
 
 -- Conversation messages table for chat history
 CREATE TABLE IF NOT EXISTS conversation_messages (
