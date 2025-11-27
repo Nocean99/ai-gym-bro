@@ -22,12 +22,21 @@ class _ChatScreenState extends State<ChatScreen> {
   final List<Message> _messages = [];
   bool _isLoading = false;
   bool _isConnected = false;
+  int? _userId;
 
   @override
   void initState() {
     super.initState();
     _checkConnection();
     _loadWelcomeMessage();
+    _loadUserId();
+  }
+
+  Future<void> _loadUserId() async {
+    final userId = await AuthService().getUserId();
+    setState(() {
+      _userId = userId;
+    });
   }
 
   Future<void> _checkConnection() async {
@@ -162,6 +171,25 @@ class _ChatScreenState extends State<ChatScreen> {
                 shape: BoxShape.circle,
               ),
             ),
+            if (_userId != null) ...[
+              const SizedBox(width: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.orange.withOpacity(0.5)),
+                ),
+                child: Text(
+                  'ID: $_userId',
+                  style: const TextStyle(
+                    color: Colors.orange,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
         actions: [
