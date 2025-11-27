@@ -43,13 +43,21 @@ GYM_MEMES = [
 
 # Database connection
 def get_db_connection():
-    return psycopg2.connect(
-        dbname="workout_tracker",
-        user="postgres",
-        password="@Nocean99",  # Your password
-        host="localhost",
-        port="5432"
-    )
+    # Use DATABASE_URL environment variable (Render provides this)
+    database_url = os.getenv('DATABASE_URL')
+
+    if database_url:
+        # Render provides DATABASE_URL
+        return psycopg2.connect(database_url)
+    else:
+        # Fallback to individual environment variables for local development
+        return psycopg2.connect(
+            dbname=os.getenv('DB_NAME', 'workout_tracker'),
+            user=os.getenv('DB_USER', 'postgres'),
+            password=os.getenv('DB_PASSWORD', ''),
+            host=os.getenv('DB_HOST', 'localhost'),
+            port=os.getenv('DB_PORT', '5432')
+        )
 
 def get_workout_data(user_id, exercise_name=None, days_back=30):
     """Get workout history from database"""
