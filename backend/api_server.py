@@ -9,17 +9,6 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# Import new modules for conversation memory and workout logic
-from .conversation_memory import save_message, get_conversation_history
-from .workout_logic import (
-    get_recent_sets,
-    analyze_set_performance,
-    get_recommendation_constraints,
-    get_active_workout_session,
-    start_workout_session,
-    update_session_exercise
-)
-
 # Load environment variables
 load_dotenv()
 
@@ -52,66 +41,36 @@ GYM_MEMES = [
     "Abs are made in the kitchen, but built in the gym!",
 ]
 
-# Enhanced System Prompt with Safety Rules
-SAFE_SYSTEM_PROMPT = """You are an experienced strength coach and gym buddy. Your primary responsibility is USER SAFETY.
-
-CRITICAL RULES FOR WEIGHT RECOMMENDATIONS:
-1. ALWAYS analyze set-to-set performance before recommending weight
-2. If reps DECREASE at the same weight → user is fatigued → recommend LIGHTER weight or stopping
-3. NEVER recommend increasing weight when performance is declining
-4. Base all recommendations on DATA from their workout history, not just motivation
-5. When in doubt, err on the side of caution - it's better to be conservative than risk injury
-
-Safety Guidelines:
-- If you receive SAFETY CONSTRAINTS in your prompt, you MUST follow them exactly
-- Performance declining (fewer reps at same weight) = FATIGUE = recommend lighter weight or stop
-- Never let motivation override safety
-- Progressive overload should be gradual (2.5-10 lbs for upper body, 5-15 lbs for lower body)
-- If uncertain, recommend maintaining current weight
-
-Personality:
-- Be encouraging and use gym bro language
-- Celebrate PRs and improvements enthusiastically
-- Give tough love when needed, but always stay supportive
-- Use phrases like "bro", "let's go", "crushing it", but not at the expense of safety
-
-Response Style:
-- Keep responses conversational and concise (2-4 sentences)
-- Use specific numbers and data from their history
-- Explain your reasoning briefly
-- Be honest about performance (good or bad)
-
-Remember: You can still be motivational while being SAFE and REALISTIC."""
-
 # Database connection
 def get_db_connection():
-    """Get database connection using environment variables for flexibility"""
-    # Check if DATABASE_URL is provided (used by Render, Heroku, etc.)
+    # Use DATABASE_URL environment variable (Render provides this)
     database_url = os.getenv('DATABASE_URL')
-    if database_url:
-        return psycopg2.connect(database_url)
 
-    # Otherwise use individual environment variables (local development)
-    return psycopg2.connect(
-        dbname=os.getenv('DB_NAME', 'workout_tracker'),
-        user=os.getenv('DB_USER', 'noah'),
-        password=os.getenv('DB_PASSWORD', ''),
-        host=os.getenv('DB_HOST', 'localhost'),
-        port=os.getenv('DB_PORT', '5432')
-    )
+    if database_url:
+        # Render provides DATABASE_URL
+        return psycopg2.connect(database_url)
+    else:
+        # Fallback to individual environment variables for local development
+        return psycopg2.connect(
+            dbname=os.getenv('DB_NAME', 'workout_tracker'),
+            user=os.getenv('DB_USER', 'postgres'),
+            password=os.getenv('DB_PASSWORD', ''),
+            host=os.getenv('DB_HOST', 'localhost'),
+            port=os.getenv('DB_PORT', '5432')
+        )
 
 def get_workout_data(user_id, exercise_name=None, days_back=30):
     """Get workout history from database"""
     conn = get_db_connection()
     cur = conn.cursor()
-    
+
     try:
         if exercise_name:
             cur.execute("""
                 SELECT w.date, e.exercise_name, e.sets, e.reps, e.weight, e.unit, e.notes
                 FROM exercises e
                 JOIN workouts w ON e.workout_id = w.id
-                WHERE e.exercise_name ILIKE %s 
+                WHERE e.exercise_name ILIKE %s
                   AND w.user_id = %s
                   AND w.date >= %s
                 ORDER BY w.date DESC
@@ -125,9 +84,9 @@ def get_workout_data(user_id, exercise_name=None, days_back=30):
                   AND w.date >= %s
                 ORDER BY w.date DESC
             """, (user_id, datetime.now().date() - timedelta(days=days_back)))
-        
+
         results = cur.fetchall()
-        
+
         formatted_data = []
         for row in results:
             date, exercise, sets, reps, weight, unit, notes = row
@@ -141,9 +100,159 @@ def get_workout_data(user_id, exercise_name=None, days_back=30):
                 'notes': notes
             }
             formatted_data.append(entry)
-        
+
         return formatted_data
-    
+
+    finally:
+        cur.close()
+        conn.close()
+
+def get_workout_session(user_id, workout_id=None, date=None):
+    """Get a complete workout session with all exercises
+
+    Args:
+        user_id: The user ID
+        workout_id: Specific workout session ID (optional)
+        date: Get workout from specific date (optional)
+
+    Returns:
+        Dictionary with workout session details and all exercises
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    try:
+        if workout_id:
+            # Get specific workout session
+            cur.execute("""
+                SELECT w.id, w.date, w.created_at, w.notes
+                FROM workouts w
+                WHERE w.id = %s AND w.user_id = %s
+            """, (workout_id, user_id))
+        elif date:
+            # Get workout from specific date (most recent if multiple)
+            cur.execute("""
+                SELECT w.id, w.date, w.created_at, w.notes
+                FROM workouts w
+                WHERE w.date = %s AND w.user_id = %s
+                ORDER BY w.created_at DESC
+                LIMIT 1
+            """, (date, user_id))
+        else:
+            # Get most recent workout session
+            cur.execute("""
+                SELECT w.id, w.date, w.created_at, w.notes
+                FROM workouts w
+                WHERE w.user_id = %s
+                ORDER BY w.created_at DESC
+                LIMIT 1
+            """, (user_id,))
+
+        workout_row = cur.fetchone()
+
+        if not workout_row:
+            return None
+
+        workout_id, date, created_at, notes = workout_row
+
+        # Get all exercises for this workout session
+        cur.execute("""
+            SELECT e.id, e.exercise_name, e.sets, e.reps, e.weight, e.unit,
+                   e.duration, e.distance, e.notes, e.created_at
+            FROM exercises e
+            WHERE e.workout_id = %s
+            ORDER BY e.created_at ASC
+        """, (workout_id,))
+
+        exercises = []
+        for ex_row in cur.fetchall():
+            ex_id, ex_name, sets, reps, weight, unit, duration, distance, ex_notes, ex_created = ex_row
+            exercises.append({
+                'id': ex_id,
+                'exercise': ex_name,
+                'sets': sets,
+                'reps': reps,
+                'weight': float(weight) if weight else None,
+                'unit': unit,
+                'duration': duration,
+                'distance': float(distance) if distance else None,
+                'notes': ex_notes,
+                'logged_at': str(ex_created)
+            })
+
+        return {
+            'workout_id': workout_id,
+            'date': str(date),
+            'started_at': str(created_at),
+            'notes': notes,
+            'exercises': exercises,
+            'total_exercises': len(exercises)
+        }
+
+    finally:
+        cur.close()
+        conn.close()
+
+def get_recent_workout_sessions(user_id, days_back=30, limit=10):
+    """Get recent workout sessions (grouped by workout_id)
+
+    Returns a list of workout sessions with all their exercises
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    try:
+        # Get recent workout IDs
+        cur.execute("""
+            SELECT w.id, w.date, w.created_at, w.notes
+            FROM workouts w
+            WHERE w.user_id = %s
+              AND w.date >= %s
+            ORDER BY w.created_at DESC
+            LIMIT %s
+        """, (user_id, datetime.now().date() - timedelta(days=days_back), limit))
+
+        workout_rows = cur.fetchall()
+
+        sessions = []
+        for workout_row in workout_rows:
+            workout_id, date, created_at, notes = workout_row
+
+            # Get exercises for this workout
+            cur.execute("""
+                SELECT e.id, e.exercise_name, e.sets, e.reps, e.weight, e.unit,
+                       e.duration, e.distance, e.notes
+                FROM exercises e
+                WHERE e.workout_id = %s
+                ORDER BY e.created_at ASC
+            """, (workout_id,))
+
+            exercises = []
+            for ex_row in cur.fetchall():
+                ex_id, ex_name, sets, reps, weight, unit, duration, distance, ex_notes = ex_row
+                exercises.append({
+                    'id': ex_id,
+                    'exercise': ex_name,
+                    'sets': sets,
+                    'reps': reps,
+                    'weight': float(weight) if weight else None,
+                    'unit': unit,
+                    'duration': duration,
+                    'distance': float(distance) if distance else None,
+                    'notes': ex_notes
+                })
+
+            sessions.append({
+                'workout_id': workout_id,
+                'date': str(date),
+                'started_at': str(created_at),
+                'notes': notes,
+                'exercises': exercises,
+                'total_exercises': len(exercises)
+            })
+
+        return sessions
+
     finally:
         cur.close()
         conn.close()
@@ -222,7 +331,7 @@ def compare_performance(user_id, current_workout):
     }
 
 def classify_and_parse(user_input):
-    """Classify intent AND parse workout data OR chart request"""
+    """Classify intent AND parse workout data OR chart request OR workout recap"""
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -235,18 +344,27 @@ def classify_and_parse(user_input):
                     - LOG_WORKOUT: "did 3x12 bench at 225"
                     - ASK_QUESTION: "what should I bench today?"
                     - CHART_REQUEST: "show me a chart of my bench press progress"
+                    - WORKOUT_RECAP: "show me my most recent workout", "what did I do today?", "recap my last workout", "what exercises did I do yesterday?"
 
                     For CHART_REQUEST, extract:
                     - exercise name (if specified)
                     - time period: "week", "month", "all" (default to "month" if not specified)
 
+                    For WORKOUT_RECAP, extract:
+                    - date: "today", "yesterday", "2024-01-15", or null for "most recent"
+                    - scope: "latest" (most recent), "all_recent" (recent sessions), or specific date
+
                     Return JSON:
                     {
-                        "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "CHART_REQUEST",
+                        "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "CHART_REQUEST" | "WORKOUT_RECAP",
                         "workout_data": [...],  // if LOG_WORKOUT
                         "chart_request": {      // if CHART_REQUEST
                             "exercise": "Bench Press",
                             "period": "month"
+                        },
+                        "workout_recap": {      // if WORKOUT_RECAP
+                            "date": "today" | "yesterday" | "2024-01-15" | null,
+                            "scope": "latest" | "all_recent"
                         }
                     }"""
                 },
@@ -266,16 +384,37 @@ def classify_and_parse(user_input):
         return {"intent": "ASK_QUESTION", "workout_data": None}
 
 def save_workout(user_id, exercises_data):
-    """Save workout and exercises to database, return workout_id and exercise details"""
+    """Save workout and exercises to database, return workout_id and exercise details
+
+    Groups exercises logged within 3 hours into the same workout session
+    """
     conn = get_db_connection()
     cur = conn.cursor()
-    
+
     try:
-        cur.execute(
-            "INSERT INTO workouts (user_id, date, notes) VALUES (%s, %s, %s) RETURNING id",
-            (user_id, datetime.now().date(), "")
-        )
-        workout_id = cur.fetchone()[0]
+        # Check if there's an existing workout within the last 3 hours
+        cur.execute("""
+            SELECT id FROM workouts
+            WHERE user_id = %s
+            AND created_at >= NOW() - INTERVAL '3 hours'
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (user_id,))
+
+        existing_workout = cur.fetchone()
+
+        if existing_workout:
+            # Reuse existing workout session
+            workout_id = existing_workout[0]
+            print(f"🔄 Adding to existing workout session #{workout_id}")
+        else:
+            # Create new workout session
+            cur.execute(
+                "INSERT INTO workouts (user_id, date, notes) VALUES (%s, %s, %s) RETURNING id",
+                (user_id, datetime.now().date(), "")
+            )
+            workout_id = cur.fetchone()[0]
+            print(f"✨ Created new workout session #{workout_id}")
         
         logged_exercises = []
         for exercise in exercises_data:
@@ -420,6 +559,66 @@ def get_celebration_response(workout_data, performance_comparison=None):
     except:
         return "Workout logged, bro! Keep grinding! 💪"
 
+def generate_workout_recap(user_id, workout_session):
+    """Generate an AI-powered recap of a workout session"""
+    if not workout_session:
+        return "Bro, I couldn't find any workout data! Log some sets first! 💪"
+
+    exercises = workout_session['exercises']
+    date = workout_session['date']
+    total_exercises = workout_session['total_exercises']
+
+    # Calculate total volume
+    total_volume = 0
+    exercise_summary = []
+    for ex in exercises:
+        if ex.get('weight') and ex.get('reps') and ex.get('sets'):
+            volume = ex['weight'] * ex['reps'] * ex['sets']
+            total_volume += volume
+            exercise_summary.append(f"- {ex['exercise']}: {ex['sets']}x{ex['reps']} @ {ex['weight']} {ex['unit']}")
+        elif ex.get('duration'):
+            exercise_summary.append(f"- {ex['exercise']}: {ex['duration']} min")
+        else:
+            exercise_summary.append(f"- {ex['exercise']}")
+
+    summary_text = "\n".join(exercise_summary)
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You're a motivational gym bro who reviews workout sessions.
+
+                    Create a brief, enthusiastic recap that:
+                    - Acknowledges the exercises completed
+                    - Mentions total volume if impressive
+                    - Gives a motivational comment about their effort
+                    - Uses gym bro language
+                    - Keeps it SHORT (3-4 sentences max)
+
+                    Be authentic and hype them up!"""
+                },
+                {
+                    "role": "user",
+                    "content": f"Workout from {date}:\n\n{summary_text}\n\nTotal volume: {total_volume:.0f} lbs\nTotal exercises: {total_exercises}"
+                }
+            ],
+            temperature=0.8
+        )
+
+        recap = response.choices[0].message.content
+
+        # Add Arnold quote occasionally
+        if random.random() < 0.3:
+            recap += f"\n\n💪 Arnold says: \"{random.choice(ARNOLD_QUOTES)}\""
+
+        return recap
+
+    except Exception as e:
+        return f"Here's your workout from {date}:\n\n{summary_text}\n\nTotal exercises: {total_exercises}\n\nKeep crushing it, bro! 💪"
+
 def answer_workout_question(user_id, question):
     """Use AI to answer questions about workout history"""
     intent_data = classify_and_parse(question)
@@ -427,26 +626,26 @@ def answer_workout_question(user_id, question):
     exercise = None
     if isinstance(workout_data, list) and workout_data:
         exercise = workout_data[0].get('exercise')
-    
+
     days_since_legs = check_leg_day_skipping(user_id)
     leg_day_warning = ""
     if days_since_legs and days_since_legs > 10:
         leg_day_warning = f"\n\n⚠️ BRO WARNING: It's been {days_since_legs} days since you trained legs! Friends don't let friends skip leg day! 🦵"
-    
+
     if exercise:
         workout_data = get_workout_data(user_id, exercise_name=exercise, days_back=90)
     else:
         workout_data = get_workout_data(user_id, days_back=30)
-    
+
     if not workout_data:
         return "Bro, I don't have any workout data yet! Let's log some workouts first! 💪"
-    
+
     arnold_quote = ""
     if random.random() < 0.2:
         arnold_quote = f"\n\n💪 Arnold says: \"{random.choice(ARNOLD_QUOTES)}\""
-    
+
     data_summary = json.dumps(workout_data, indent=2)
-    
+
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -454,7 +653,7 @@ def answer_workout_question(user_id, question):
                 {
                     "role": "system",
                     "content": """You are an expert gym bro personal trainer with the user's complete workout history.
-                    
+
                     - Answer with SPECIFIC DATA and NUMBERS
                     - Provide weight/rep recommendations using progressive overload
                     - CALL OUT when they're lifting less than before
@@ -468,9 +667,9 @@ def answer_workout_question(user_id, question):
             ],
             temperature=0.7
         )
-        
+
         return response.choices[0].message.content + arnold_quote + leg_day_warning
-    
+
     except Exception as e:
         return "Had trouble with that one, bro! 💪"
 
@@ -580,98 +779,65 @@ def health_check():
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    """Main chat endpoint - handles both logging and questions with conversation memory"""
+    """Main chat endpoint - handles both logging and questions"""
     try:
         data = request.json
         user_message = data.get('message', '')
         user_id = data.get('user_id', 1)
-        session_id = data.get('session_id', None)  # Optional workout session ID
-        current_exercise = data.get('current_exercise', None)  # Optional current exercise
-
+        
         if not user_message:
             return jsonify({"error": "No message provided"}), 400
-
-        # === STEP 1: Save user's message to conversation history ===
-        save_message(user_id, 'user', user_message, session_id)
-
-        # === STEP 2: Classify intent ===
+        
+        # NEW: Classify AND parse in one call
         result = classify_and_parse(user_message)
         intent = result['intent']
-
-        # === STEP 3: Handle different intents ===
+        
         if intent == 'LOG_WORKOUT':
             parsed = result['workout_data']
-
+            
             if not parsed or len(parsed) == 0:
-                error_msg = "Didn't quite catch that, bro. Try again?"
-                save_message(user_id, 'assistant', error_msg, session_id)
                 return jsonify({
                     "type": "error",
-                    "message": error_msg
+                    "message": "Didn't quite catch that, bro. Try again?"
                 })
-
-            # Get or create workout session if not provided
-            if not session_id:
-                workout_session = get_active_workout_session(user_id)
-                if workout_session:
-                    session_id = workout_session['session_id']
-                else:
-                    # Start new session with first exercise
-                    exercise_name = parsed[0].get('exercise') if parsed else None
-                    session_id = start_workout_session(user_id, exercise_name)
-
-            # Update current exercise in session
-            if current_exercise or (parsed and parsed[0].get('exercise')):
-                exercise_name = current_exercise or parsed[0].get('exercise')
-                update_session_exercise(session_id, exercise_name)
-
+            
             # Compare performance before saving
             performance = compare_performance(user_id, parsed)
-
+            
             # Save workout - returns workout_id AND logged exercises
             workout_id, logged_exercises = save_workout(user_id, parsed)
-
+            
             if not workout_id:
-                error_msg = "Had trouble saving that. Try again?"
-                save_message(user_id, 'assistant', error_msg, session_id)
                 return jsonify({
                     "type": "error",
-                    "message": error_msg
+                    "message": "Had trouble saving that. Try again?"
                 })
-
+            
             # Get celebration (with performance context!)
             celebration = get_celebration_response(parsed, performance)
-
+            
             # Add Arnold quote for PRs
             arnold = ""
             if performance and performance.get('is_pr'):
                 arnold = f"\n\n💪 Arnold says: \"{random.choice(ARNOLD_QUOTES)}\""
-
-            final_message = celebration + arnold
-
-            # Save assistant response
-            save_message(user_id, 'assistant', final_message, session_id)
-
+            
             return jsonify({
                 "type": "workout_logged",
-                "message": final_message,
+                "message": celebration + arnold,
                 "workout_id": workout_id,
                 "logged_sets": logged_exercises,
-                "performance": performance,
-                "session_id": session_id
+                "performance": performance
             })
-
+        
         elif intent == 'CHART_REQUEST':
             chart_req = result.get('chart_request', {})
             exercise = chart_req.get('exercise')
             period = chart_req.get('period', 'month')
 
             if not exercise:
-                msg = "Which exercise do you want to see a chart for, bro?"
-                save_message(user_id, 'assistant', msg, session_id)
                 return jsonify({
                     "type": "answer",
-                    "message": msg
+                    "message": "Which exercise do you want to see a chart for, bro?"
                 })
 
             days_map = {
@@ -685,87 +851,107 @@ def chat():
             chart_data = generate_chart_data(user_id, exercise, days_back)
 
             if chart_data:
-                msg = f"Here's your {exercise} progress over the last {period}! 💪"
-                save_message(user_id, 'assistant', msg, session_id)
                 return jsonify({
                     "type": "chart",
-                    "message": msg,
+                    "message": f"Here's your {exercise} progress over the last {period}! 💪",
                     "chart_data": chart_data
                 })
             else:
-                msg = f"Bro, I don't have any data for {exercise} yet. Log some workouts first! 💪"
-                save_message(user_id, 'assistant', msg, session_id)
                 return jsonify({
                     "type": "answer",
-                    "message": msg
+                    "message": f"Bro, I don't have any data for {exercise} yet. Log some workouts first! 💪"
                 })
 
-        else:  # ASK_QUESTION - This is where conversation memory and safety logic apply
-            # === STEP 4: Retrieve conversation history ===
-            conversation_history = get_conversation_history(user_id, session_id, limit=20)
+        elif intent == 'WORKOUT_RECAP':
+            recap_req = result.get('workout_recap', {})
+            date_str = recap_req.get('date')
+            scope = recap_req.get('scope', 'latest')
 
-            # === STEP 5: Build messages array with system prompt ===
-            messages = [{"role": "system", "content": SAFE_SYSTEM_PROMPT}]
+            if scope == 'all_recent':
+                # Get recent workout sessions
+                sessions = get_recent_workout_sessions(user_id, days_back=30, limit=5)
 
-            # === STEP 6: Check if this looks like a weight recommendation request ===
-            weight_keywords = ['what should', 'recommend', 'next set', 'final set', 'weight',
-                             'how much', 'what weight', 'heavier', 'lighter', 'increase', 'decrease']
-            is_weight_question = any(keyword in user_message.lower() for keyword in weight_keywords)
+                if not sessions:
+                    return jsonify({
+                        "type": "answer",
+                        "message": "Bro, I don't have any recent workouts logged! Let's hit the gym! 💪"
+                    })
 
-            if is_weight_question:
-                # Try to determine exercise from context
-                exercise_name = current_exercise
+                # Format all sessions
+                sessions_text = []
+                for session in sessions:
+                    exercises_text = []
+                    for ex in session['exercises']:
+                        if ex.get('weight') and ex.get('reps') and ex.get('sets'):
+                            exercises_text.append(f"{ex['exercise']}: {ex['sets']}x{ex['reps']} @ {ex['weight']} {ex['unit']}")
+                        else:
+                            exercises_text.append(f"{ex['exercise']}")
 
-                # If no current exercise, try to extract from message or recent history
-                if not exercise_name and conversation_history:
-                    # Simple extraction: look for common exercise names in recent messages
-                    for msg in reversed(conversation_history[-5:]):  # Check last 5 messages
-                        content_lower = msg['content'].lower()
-                        for ex in ['bench', 'squat', 'deadlift', 'press', 'row', 'curl', 'pullup', 'pull up']:
-                            if ex in content_lower:
-                                exercise_name = ex
-                                break
-                        if exercise_name:
-                            break
+                    sessions_text.append(f"**{session['date']}** ({session['total_exercises']} exercises):\n" + "\n".join([f"  • {e}" for e in exercises_text]))
 
-                # Get recent sets and analyze performance
-                if exercise_name and session_id:
-                    recent_sets = get_recent_sets(user_id, session_id, exercise_name, limit=10)
+                recap_message = "Here are your recent workout sessions, bro! 💪\n\n" + "\n\n".join(sessions_text)
 
-                    if len(recent_sets) >= 1:
-                        # Analyze performance
-                        analysis = analyze_set_performance(recent_sets)
-                        constraints = get_recommendation_constraints(analysis)
+                return jsonify({
+                    "type": "workout_recap",
+                    "message": recap_message,
+                    "sessions": sessions
+                })
+            else:
+                # Get specific workout session
+                target_date = None
+                if date_str == 'today':
+                    target_date = datetime.now().date()
+                elif date_str == 'yesterday':
+                    target_date = datetime.now().date() - timedelta(days=1)
+                elif date_str:
+                    try:
+                        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    except:
+                        target_date = None
 
-                        if constraints:
-                            # Inject safety constraints into system prompt
-                            enhanced_prompt = f"{SAFE_SYSTEM_PROMPT}\n\n{constraints}\n\nRecent sets for {exercise_name}: {recent_sets}"
-                            messages[0] = {"role": "system", "content": enhanced_prompt}
+                if target_date:
+                    workout_session = get_workout_session(user_id, date=target_date)
+                else:
+                    workout_session = get_workout_session(user_id)
 
-            # === STEP 7: Add conversation history ===
-            messages.extend(conversation_history)
+                if not workout_session:
+                    return jsonify({
+                        "type": "answer",
+                        "message": "Bro, I couldn't find that workout! Log some sets first! 💪"
+                    })
 
-            # === STEP 8: Add current user message ===
-            messages.append({"role": "user", "content": user_message})
+                # Generate AI recap
+                recap = generate_workout_recap(user_id, workout_session)
 
-            # === STEP 9: Call OpenAI with LOWER temperature for safety ===
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                temperature=0.2  # Lower temperature = more consistent, safer responses
-            )
+                # Format exercises for display
+                exercises_formatted = []
+                for ex in workout_session['exercises']:
+                    if ex.get('weight') and ex.get('reps') and ex.get('sets'):
+                        exercises_formatted.append({
+                            'text': f"{ex['exercise']}: {ex['sets']}x{ex['reps']} @ {ex['weight']} {ex['unit']}",
+                            'id': ex['id']
+                        })
+                    else:
+                        exercises_formatted.append({
+                            'text': f"{ex['exercise']}",
+                            'id': ex['id']
+                        })
 
-            assistant_message = response.choices[0].message.content
+                return jsonify({
+                    "type": "workout_recap",
+                    "message": recap,
+                    "workout_session": workout_session,
+                    "exercises_formatted": exercises_formatted
+                })
 
-            # === STEP 10: Save assistant's response ===
-            save_message(user_id, 'assistant', assistant_message, session_id)
+        else:  # ASK_QUESTION
+            answer = answer_workout_question(user_id, user_message)
 
             return jsonify({
                 "type": "answer",
-                "message": assistant_message,
-                "session_id": session_id
+                "message": answer
             })
-
+    
     except Exception as e:
         print("\n" + "="*60)
         print("❌ ERROR in /chat endpoint:")
@@ -838,19 +1024,264 @@ def get_history():
         user_id = request.args.get('user_id', 1)
         days = request.args.get('days', 30)
         exercise = request.args.get('exercise', None)
-        
+
         workout_data = get_workout_data(user_id, exercise, int(days))
-        
+
         return jsonify({
             "success": True,
             "data": workout_data
         })
-    
+
     except Exception as e:
         return jsonify({
             "success": False,
             "error": str(e)
         }), 500
+
+@app.route('/workouts/all', methods=['GET'])
+def get_all_workouts():
+    """Get all workouts with full details - JSON format"""
+    try:
+        user_id = request.args.get('user_id', 1)
+        days_back = request.args.get('days', 365)  # Default to last year
+
+        sessions = get_recent_workout_sessions(user_id, days_back=int(days_back), limit=100)
+
+        return jsonify({
+            "success": True,
+            "total_workouts": len(sessions),
+            "workouts": sessions
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/workouts/view', methods=['GET'])
+def view_all_workouts():
+    """View all workouts in browser - HTML format"""
+    try:
+        user_id = request.args.get('user_id', 1)
+        days_back = request.args.get('days', 365)
+
+        sessions = get_recent_workout_sessions(user_id, days_back=int(days_back), limit=100)
+
+        # Build HTML
+        html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Gym Bro - Workout History</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .stats {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .workout-session {
+            background: white;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .workout-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            font-weight: bold;
+        }
+        .workout-date {
+            font-size: 1.2em;
+        }
+        .workout-meta {
+            font-size: 0.9em;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        .exercises {
+            padding: 20px;
+        }
+        .exercise {
+            padding: 12px;
+            margin-bottom: 8px;
+            background: #f8f9fa;
+            border-left: 4px solid #3498db;
+            border-radius: 4px;
+        }
+        .exercise-name {
+            font-weight: bold;
+            color: #2c3e50;
+            font-size: 1.1em;
+        }
+        .exercise-details {
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+        .no-workouts {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+        .filter {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        select, button {
+            padding: 10px 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            font-size: 14px;
+        }
+        button {
+            background: #3498db;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        button:hover {
+            background: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <h1>🏋️ AI Gym Bro - Workout History</h1>
+
+    <div class="stats">
+        <strong>Total Workouts:</strong> """ + str(len(sessions)) + """
+        <br>
+        <strong>User ID:</strong> """ + str(user_id) + """
+        <br>
+        <strong>Viewing:</strong> Last """ + str(days_back) + """ days
+    </div>
+
+    <div class="filter">
+        <form method="GET" style="display: inline-block;">
+            <label>User ID:</label>
+            <select name="user_id">
+                <option value="1" """ + ('selected' if str(user_id) == '1' else '') + """>User 1</option>
+                <option value="2" """ + ('selected' if str(user_id) == '2' else '') + """>User 2</option>
+                <option value="3" """ + ('selected' if str(user_id) == '3' else '') + """>User 3</option>
+            </select>
+
+            <label style="margin-left: 15px;">Time Period:</label>
+            <select name="days">
+                <option value="7" """ + ('selected' if str(days_back) == '7' else '') + """>Last 7 days</option>
+                <option value="30" """ + ('selected' if str(days_back) == '30' else '') + """>Last 30 days</option>
+                <option value="90" """ + ('selected' if str(days_back) == '90' else '') + """>Last 90 days</option>
+                <option value="365" """ + ('selected' if str(days_back) == '365' else '') + """>Last year</option>
+                <option value="3650">All time</option>
+            </select>
+
+            <button type="submit">Filter</button>
+        </form>
+    </div>
+"""
+
+        if not sessions:
+            html += """
+    <div class="no-workouts">
+        <h2>No workouts found!</h2>
+        <p>Start logging some workouts to see them here! 💪</p>
+    </div>
+"""
+        else:
+            for session in sessions:
+                workout_date = session['date']
+                started_at = session.get('started_at', '')
+                total_exercises = session['total_exercises']
+                exercises = session['exercises']
+
+                # Calculate total volume
+                total_volume = 0
+                for ex in exercises:
+                    if ex.get('weight') and ex.get('reps') and ex.get('sets'):
+                        total_volume += ex['weight'] * ex['reps'] * ex['sets']
+
+                html += f"""
+    <div class="workout-session">
+        <div class="workout-header">
+            <div class="workout-date">📅 {workout_date}</div>
+            <div class="workout-meta">
+                {total_exercises} exercise{"s" if total_exercises != 1 else ""} •
+                Total Volume: {total_volume:,.0f} lbs •
+                Started: {started_at.split()[1] if ' ' in started_at else started_at}
+            </div>
+        </div>
+        <div class="exercises">
+"""
+
+                for ex in exercises:
+                    ex_name = ex.get('exercise', 'Unknown')
+                    sets = ex.get('sets')
+                    reps = ex.get('reps')
+                    weight = ex.get('weight')
+                    unit = ex.get('unit', 'lbs')
+                    duration = ex.get('duration')
+                    notes = ex.get('notes', '')
+
+                    details = ""
+                    if sets and reps and weight:
+                        details = f"{sets} sets × {reps} reps @ {weight} {unit}"
+                        volume = sets * reps * weight
+                        details += f" (Volume: {volume:,.0f} {unit})"
+                    elif duration:
+                        details = f"{duration} minutes"
+
+                    if notes:
+                        details += f" - {notes}"
+
+                    html += f"""
+            <div class="exercise">
+                <div class="exercise-name">{ex_name}</div>
+                <div class="exercise-details">{details}</div>
+            </div>
+"""
+
+                html += """
+        </div>
+    </div>
+"""
+
+        html += """
+</body>
+</html>
+"""
+
+        return html
+
+    except Exception as e:
+        return f"""
+<!DOCTYPE html>
+<html>
+<head><title>Error</title></head>
+<body>
+    <h1>Error Loading Workouts</h1>
+    <p>{str(e)}</p>
+</body>
+</html>
+""", 500
 
 if __name__ == '__main__':
     print("=" * 60)
@@ -863,7 +1294,11 @@ if __name__ == '__main__':
     print("  POST   /chat - Main chat endpoint")
     print("  DELETE /delete-set - Delete a specific exercise set")
     print("  GET    /history - Get workout history")
+    print("  GET    /workouts/all - Get all workouts (JSON)")
+    print("  GET    /workouts/view - View all workouts (HTML)")
     print("  GET    /health - Health check")
+    print("\n💡 View your workouts in browser:")
+    print("   http://localhost:5001/workouts/view")
     print("\n" + "=" * 60 + "\n")
-    
+
     app.run(debug=True, host='0.0.0.0', port=5001)
