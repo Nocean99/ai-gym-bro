@@ -38,6 +38,7 @@ dependencies:
   fl_chart: ^0.66.0  # Add this line
   shared_preferences: ^2.2.2  # ADD THIS LINE
   provider: ^6.1.1
+  flutter_dotenv: ^5.1.0  # Environment variables
 
 dev_dependencies:
   flutter_test:
