@@ -23,6 +23,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isLoading = false;
   bool _isConnected = false;
   int? _userId;
+  String? _username;
 
   @override
   void initState() {
@@ -34,8 +35,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadUserId() async {
     final userId = await AuthService().getUserId();
+    final username = await AuthService().getUsername();
     setState(() {
       _userId = userId;
+      _username = username;
     });
   }
 
@@ -171,7 +174,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 shape: BoxShape.circle,
               ),
             ),
-            if (_userId != null) ...[
+            if (_userId != null && _username != null) ...[
               const SizedBox(width: 12),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -181,7 +184,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   border: Border.all(color: Colors.orange.withOpacity(0.5)),
                 ),
                 child: Text(
-                  'ID: $_userId',
+                  '@$_username (ID: $_userId)',
                   style: const TextStyle(
                     color: Colors.orange,
                     fontSize: 12,
