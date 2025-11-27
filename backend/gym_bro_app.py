@@ -335,17 +335,37 @@ def parse_workout(description):
         return None
 
 def save_workout(user_id, exercises_data, notes=""):
-    """Save workout and exercises to database"""
+    """Save workout and exercises to database
+
+    Groups exercises logged within 3 hours into the same workout session
+    """
     conn = get_db_connection()
     cur = conn.cursor()
-    
+
     try:
-        # Create workout entry
-        cur.execute(
-            "INSERT INTO workouts (user_id, date, notes) VALUES (%s, %s, %s) RETURNING id",
-            (user_id, datetime.now().date(), notes)
-        )
-        workout_id = cur.fetchone()[0]
+        # Check if there's an existing workout within the last 3 hours
+        cur.execute("""
+            SELECT id FROM workouts
+            WHERE user_id = %s
+            AND created_at >= NOW() - INTERVAL '3 hours'
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, (user_id,))
+
+        existing_workout = cur.fetchone()
+
+        if existing_workout:
+            # Reuse existing workout session
+            workout_id = existing_workout[0]
+            print(f"🔄 Adding to existing workout session #{workout_id}")
+        else:
+            # Create new workout entry
+            cur.execute(
+                "INSERT INTO workouts (user_id, date, notes) VALUES (%s, %s, %s) RETURNING id",
+                (user_id, datetime.now().date(), notes)
+            )
+            workout_id = cur.fetchone()[0]
+            print(f"✨ Created new workout session #{workout_id}")
         
         # Save each exercise
         for exercise in exercises_data:
