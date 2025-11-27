@@ -1016,19 +1016,264 @@ def get_history():
         user_id = request.args.get('user_id', 1)
         days = request.args.get('days', 30)
         exercise = request.args.get('exercise', None)
-        
+
         workout_data = get_workout_data(user_id, exercise, int(days))
-        
+
         return jsonify({
             "success": True,
             "data": workout_data
         })
-    
+
     except Exception as e:
         return jsonify({
             "success": False,
             "error": str(e)
         }), 500
+
+@app.route('/workouts/all', methods=['GET'])
+def get_all_workouts():
+    """Get all workouts with full details - JSON format"""
+    try:
+        user_id = request.args.get('user_id', 1)
+        days_back = request.args.get('days', 365)  # Default to last year
+
+        sessions = get_recent_workout_sessions(user_id, days_back=int(days_back), limit=100)
+
+        return jsonify({
+            "success": True,
+            "total_workouts": len(sessions),
+            "workouts": sessions
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+@app.route('/workouts/view', methods=['GET'])
+def view_all_workouts():
+    """View all workouts in browser - HTML format"""
+    try:
+        user_id = request.args.get('user_id', 1)
+        days_back = request.args.get('days', 365)
+
+        sessions = get_recent_workout_sessions(user_id, days_back=int(days_back), limit=100)
+
+        # Build HTML
+        html = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AI Gym Bro - Workout History</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        .stats {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .workout-session {
+            background: white;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .workout-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            font-weight: bold;
+        }
+        .workout-date {
+            font-size: 1.2em;
+        }
+        .workout-meta {
+            font-size: 0.9em;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        .exercises {
+            padding: 20px;
+        }
+        .exercise {
+            padding: 12px;
+            margin-bottom: 8px;
+            background: #f8f9fa;
+            border-left: 4px solid #3498db;
+            border-radius: 4px;
+        }
+        .exercise-name {
+            font-weight: bold;
+            color: #2c3e50;
+            font-size: 1.1em;
+        }
+        .exercise-details {
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+        .no-workouts {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+        }
+        .filter {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        select, button {
+            padding: 10px 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            font-size: 14px;
+        }
+        button {
+            background: #3498db;
+            color: white;
+            border: none;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        button:hover {
+            background: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <h1>🏋️ AI Gym Bro - Workout History</h1>
+
+    <div class="stats">
+        <strong>Total Workouts:</strong> """ + str(len(sessions)) + """
+        <br>
+        <strong>User ID:</strong> """ + str(user_id) + """
+        <br>
+        <strong>Viewing:</strong> Last """ + str(days_back) + """ days
+    </div>
+
+    <div class="filter">
+        <form method="GET" style="display: inline-block;">
+            <label>User ID:</label>
+            <select name="user_id">
+                <option value="1" """ + ('selected' if str(user_id) == '1' else '') + """>User 1</option>
+                <option value="2" """ + ('selected' if str(user_id) == '2' else '') + """>User 2</option>
+                <option value="3" """ + ('selected' if str(user_id) == '3' else '') + """>User 3</option>
+            </select>
+
+            <label style="margin-left: 15px;">Time Period:</label>
+            <select name="days">
+                <option value="7" """ + ('selected' if str(days_back) == '7' else '') + """>Last 7 days</option>
+                <option value="30" """ + ('selected' if str(days_back) == '30' else '') + """>Last 30 days</option>
+                <option value="90" """ + ('selected' if str(days_back) == '90' else '') + """>Last 90 days</option>
+                <option value="365" """ + ('selected' if str(days_back) == '365' else '') + """>Last year</option>
+                <option value="3650">All time</option>
+            </select>
+
+            <button type="submit">Filter</button>
+        </form>
+    </div>
+"""
+
+        if not sessions:
+            html += """
+    <div class="no-workouts">
+        <h2>No workouts found!</h2>
+        <p>Start logging some workouts to see them here! 💪</p>
+    </div>
+"""
+        else:
+            for session in sessions:
+                workout_date = session['date']
+                started_at = session.get('started_at', '')
+                total_exercises = session['total_exercises']
+                exercises = session['exercises']
+
+                # Calculate total volume
+                total_volume = 0
+                for ex in exercises:
+                    if ex.get('weight') and ex.get('reps') and ex.get('sets'):
+                        total_volume += ex['weight'] * ex['reps'] * ex['sets']
+
+                html += f"""
+    <div class="workout-session">
+        <div class="workout-header">
+            <div class="workout-date">📅 {workout_date}</div>
+            <div class="workout-meta">
+                {total_exercises} exercise{"s" if total_exercises != 1 else ""} •
+                Total Volume: {total_volume:,.0f} lbs •
+                Started: {started_at.split()[1] if ' ' in started_at else started_at}
+            </div>
+        </div>
+        <div class="exercises">
+"""
+
+                for ex in exercises:
+                    ex_name = ex.get('exercise', 'Unknown')
+                    sets = ex.get('sets')
+                    reps = ex.get('reps')
+                    weight = ex.get('weight')
+                    unit = ex.get('unit', 'lbs')
+                    duration = ex.get('duration')
+                    notes = ex.get('notes', '')
+
+                    details = ""
+                    if sets and reps and weight:
+                        details = f"{sets} sets × {reps} reps @ {weight} {unit}"
+                        volume = sets * reps * weight
+                        details += f" (Volume: {volume:,.0f} {unit})"
+                    elif duration:
+                        details = f"{duration} minutes"
+
+                    if notes:
+                        details += f" - {notes}"
+
+                    html += f"""
+            <div class="exercise">
+                <div class="exercise-name">{ex_name}</div>
+                <div class="exercise-details">{details}</div>
+            </div>
+"""
+
+                html += """
+        </div>
+    </div>
+"""
+
+        html += """
+</body>
+</html>
+"""
+
+        return html
+
+    except Exception as e:
+        return f"""
+<!DOCTYPE html>
+<html>
+<head><title>Error</title></head>
+<body>
+    <h1>Error Loading Workouts</h1>
+    <p>{str(e)}</p>
+</body>
+</html>
+""", 500
 
 if __name__ == '__main__':
     print("=" * 60)
@@ -1041,7 +1286,11 @@ if __name__ == '__main__':
     print("  POST   /chat - Main chat endpoint")
     print("  DELETE /delete-set - Delete a specific exercise set")
     print("  GET    /history - Get workout history")
+    print("  GET    /workouts/all - Get all workouts (JSON)")
+    print("  GET    /workouts/view - View all workouts (HTML)")
     print("  GET    /health - Health check")
+    print("\n💡 View your workouts in browser:")
+    print("   http://localhost:5001/workouts/view")
     print("\n" + "=" * 60 + "\n")
-    
+
     app.run(debug=True, host='0.0.0.0', port=5001)
