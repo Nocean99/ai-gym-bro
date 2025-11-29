@@ -148,9 +148,14 @@ class _ChatScreenState extends State<ChatScreen> {
         backgroundColor: Colors.black,
         title: Row(
           children: [
-            const Text(
-              '💪',
-              style: TextStyle(fontSize: 28),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.asset(
+                'assets/logo.png',
+                width: 28,
+                height: 28,
+                fit: BoxFit.cover,
+              ),
             ),
             const SizedBox(width: 8),
             const Text(
