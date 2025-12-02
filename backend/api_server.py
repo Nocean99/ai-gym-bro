@@ -85,13 +85,19 @@ Remember: You can still be motivational while being SAFE and REALISTIC."""
 
 # Database connection
 def get_db_connection():
-    return psycopg2.connect(
-        dbname="workout_tracker",
-        user="noah",
-        password="",  # No password for local development
-        host="localhost",
-        port="5432"
-    )
+    # Use DATABASE_URL from environment (Render) or fall back to local
+    database_url = os.getenv('DATABASE_URL')
+    if database_url:
+        return psycopg2.connect(database_url)
+    else:
+        # Local development fallback
+        return psycopg2.connect(
+            dbname="workout_tracker",
+            user="noah",
+            password="",
+            host="localhost",
+            port="5432"
+        )
 
 def get_workout_data(user_id, exercise_name=None, days_back=30):
     """Get workout history from database"""
