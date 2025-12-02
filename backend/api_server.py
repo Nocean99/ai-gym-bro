@@ -238,26 +238,43 @@ def classify_and_parse(user_input):
             messages=[
                 {
                     "role": "system",
-                    "content": """You are a workout assistant that classifies user intent.
+                    "content": """You are a workout assistant that classifies user intent and parses workout data.
 
-                    Classify as:
-                    - LOG_WORKOUT: "did 3x12 bench at 225"
-                    - ASK_QUESTION: "what should I bench today?"
-                    - CHART_REQUEST: "show me a chart of my bench press progress"
+Classify as:
+- LOG_WORKOUT: User logging a completed workout
+- ASK_QUESTION: User asking for advice or recommendations  
+- CHART_REQUEST: User requesting progress charts
 
-                    For CHART_REQUEST, extract:
-                    - exercise name (if specified)
-                    - time period: "week", "month", "all" (default to "month" if not specified)
+For LOG_WORKOUT, parse workout_data as array of exercises with:
+- Strength exercises: {"exercise": "bench press", "sets": 3, "reps": 12, "weight": 225, "unit": "lbs"}
+- Cardio exercises: {"exercise": "treadmill", "duration": 30, "distance": 5.0, "notes": "incline 10, speed 3"}
+- Bodyweight: {"exercise": "push-ups", "sets": 4, "reps": 10}
 
-                    Return JSON:
-                    {
-                        "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "CHART_REQUEST",
-                        "workout_data": [...],  // if LOG_WORKOUT
-                        "chart_request": {      // if CHART_REQUEST
-                            "exercise": "Bench Press",
-                            "period": "month"
-                        }
-                    }"""
+CRITICAL RULES:
+- duration must be INTEGER (minutes only, NOT "30 minutes", just 30)
+- distance must be FLOAT (km as number, NOT "5k", just 5.0)
+- Extract ONLY numeric values from duration/distance
+- If user says "30 minutes", extract 30
+- If user says "5k" or "5km", extract 5.0
+- notes can be STRING (for additional info like incline, speed)
+
+For CHART_REQUEST, extract:
+- exercise name (if specified)
+- time period: "week", "month", "year", "all" (default "month")
+
+Return JSON:
+{
+    "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "CHART_REQUEST",
+    "workout_data": [...],  // if LOG_WORKOUT
+    "chart_request": {"exercise": "...", "period": "..."}  // if CHART_REQUEST
+}
+
+Examples:
+Input: "walked on treadmill for 30 minutes at incline 10"
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "treadmill", "duration": 30, "notes": "incline 10"}]}
+
+Input: "ran 10km"  
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "running", "distance": 10.0}]}"""
                 },
                 {
                     "role": "user",
