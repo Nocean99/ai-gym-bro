@@ -294,40 +294,50 @@ def compare_performance(user_id, current_workout):
     """Compare current workout to previous performance"""
     if not current_workout or not current_workout[0].get('exercise'):
         return None
-    
+
     exercise_name = current_workout[0]['exercise']
     current_weight = current_workout[0].get('weight')
     current_reps = current_workout[0].get('reps')
     current_sets = current_workout[0].get('sets')
-    
+
     if not current_weight or not current_reps:
         return None
-    
+
     history = get_workout_data(user_id, exercise_name, days_back=60)
-    
+
     if len(history) < 1:
         return None
-    
+
     previous = history[0]
     prev_weight = previous.get('weight')
     prev_reps = previous.get('reps')
     prev_sets = previous.get('sets')
-    
+
     if not prev_weight or not prev_reps:
         return None
-    
+
     current_volume = current_weight * current_reps * (current_sets or 1)
     prev_volume = prev_weight * prev_reps * (prev_sets or 1)
-    
+
     percent_change = ((current_volume - prev_volume) / prev_volume) * 100
-    
+
+    # PR Detection - A PR is achieved if ANY of these conditions are met:
+    # 1. Higher weight at any rep count
+    # 2. Same weight but more reps (rep PR)
+    # 3. Same weight, same reps, but more sets (volume PR)
+    is_pr = (
+        (current_weight > prev_weight) or  # Weight PR
+        (current_weight == prev_weight and current_reps > prev_reps) or  # Rep PR
+        (current_weight == prev_weight and current_reps == prev_reps and (current_sets or 1) > (prev_sets or 1))  # Volume PR
+    )
+
     return {
         'exercise': exercise_name,
         'current': {'weight': current_weight, 'reps': current_reps, 'sets': current_sets},
         'previous': {'weight': prev_weight, 'reps': prev_reps, 'sets': prev_sets, 'date': previous['date']},
         'percent_change': percent_change,
         'is_improvement': percent_change > 0,
-        'is_pr': current_weight > prev_weight and current_reps >= prev_reps
+        'is_pr': is_pr
     }
 
 def classify_and_parse(user_input):
@@ -383,15 +393,21 @@ def classify_and_parse(user_input):
         print(f"Error in classify_and_parse: {e}")
         return {"intent": "ASK_QUESTION", "workout_data": None}
 
+<<<<<<< HEAD
 def save_workout(user_id, exercises_data):
     """Save workout and exercises to database, return workout_id and exercise details
 
     Groups exercises logged within 3 hours into the same workout session
     """
+=======
+def save_workout(user_id, exercises_data, session_id=None):
+    """Save workout and exercises to database, return workout_id and exercise details"""
+>>>>>>> origin/claude/fix-safety-memory-01U5UDqhZ3jUhcN7jHf3kCPW
     conn = get_db_connection()
     cur = conn.cursor()
 
     try:
+<<<<<<< HEAD
         # Check if there's an existing workout within the last 3 hours
         cur.execute("""
             SELECT id FROM workouts
@@ -416,15 +432,23 @@ def save_workout(user_id, exercises_data):
             workout_id = cur.fetchone()[0]
             print(f"✨ Created new workout session #{workout_id}")
         
+=======
+        cur.execute(
+            "INSERT INTO workouts (user_id, date, notes) VALUES (%s, %s, %s) RETURNING id",
+            (user_id, datetime.now().date(), "")
+        )
+        workout_id = cur.fetchone()[0]
+
+>>>>>>> origin/claude/fix-safety-memory-01U5UDqhZ3jUhcN7jHf3kCPW
         logged_exercises = []
         for exercise in exercises_data:
             if not exercise.get('exercise'):
                 continue
-                
+
             cur.execute("""
-                INSERT INTO exercises 
-                (workout_id, exercise_name, sets, reps, weight, unit, duration, distance, notes)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO exercises
+                (workout_id, exercise_name, sets, reps, weight, unit, duration, distance, notes, workout_session_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id, exercise_name, sets, reps, weight, unit
             """, (
                 workout_id,
@@ -435,9 +459,10 @@ def save_workout(user_id, exercises_data):
                 exercise.get('unit', 'lbs'),
                 exercise.get('duration'),
                 exercise.get('distance'),
-                exercise.get('notes')
+                exercise.get('notes'),
+                session_id
             ))
-            
+
             # Capture the returned exercise data
             result = cur.fetchone()
             logged_exercises.append({
@@ -448,21 +473,23 @@ def save_workout(user_id, exercises_data):
                 'weight': float(result[4]) if result[4] else None,
                 'unit': result[5]
             })
-        
+
         conn.commit()
         return workout_id, logged_exercises
-    
+
     except Exception as e:
         conn.rollback()
         print(f"Error saving workout: {e}")
+        import traceback
+        traceback.print_exc()
         return None, []
-    
+
     finally:
         cur.close()
         conn.close()
 
 def generate_chart_data(user_id, exercise_name, days_back=30):
-    """Get workout data formatted for charts"""
+    """Get workout data formatted for charts with dual metrics (max weight and total volume)"""
     workout_data = get_workout_data(user_id, exercise_name, days_back)
 
     if not workout_data:
@@ -495,12 +522,26 @@ def generate_chart_data(user_id, exercise_name, days_back=30):
             seen_dates[date]['sets'] += sets
 
     chart_data = list(seen_dates.values())
-    chart_data.sort(key=lambda x: x['date'], reverse=True)
+    chart_data.sort(key=lambda x: x['date'])  # Sort chronologically (oldest to newest)
+
+    # Create dual metric series for easy charting
+    max_weight_series = [{'date': d['date'], 'value': d['max_weight']} for d in chart_data]
+    total_volume_series = [{'date': d['date'], 'value': d['total_volume']} for d in chart_data]
 
     return {
         'exercise': exercise_name,
-        'data_points': chart_data,
-        'chart_type': 'line'
+        'data_points': chart_data,  # Complete data with all metrics
+        'chart_type': 'line',
+        'metrics': {
+            'max_weight': {
+                'label': 'Max Weight (lbs)',
+                'data': max_weight_series
+            },
+            'total_volume': {
+                'label': 'Total Volume (lbs)',
+                'data': total_volume_series
+            }
+        }
     }
 
 def get_celebration_response(workout_data, performance_comparison=None):
@@ -805,8 +846,13 @@ def chat():
             performance = compare_performance(user_id, parsed)
             
             # Save workout - returns workout_id AND logged exercises
+<<<<<<< HEAD
             workout_id, logged_exercises = save_workout(user_id, parsed)
             
+=======
+            workout_id, logged_exercises = save_workout(user_id, parsed, session_id)
+
+>>>>>>> origin/claude/fix-safety-memory-01U5UDqhZ3jUhcN7jHf3kCPW
             if not workout_id:
                 return jsonify({
                     "type": "error",
