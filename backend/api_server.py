@@ -246,17 +246,31 @@ Classify as:
 - CHART_REQUEST: User requesting progress charts
 
 For LOG_WORKOUT, parse workout_data as array of exercises with:
-- Strength exercises: {"exercise": "bench press", "sets": 3, "reps": 12, "weight": 225, "unit": "lbs"}
-- Cardio exercises: {"exercise": "treadmill", "duration": 30, "distance": 5.0, "notes": "incline 10, speed 3"}
-- Bodyweight: {"exercise": "push-ups", "sets": 4, "reps": 10}
 
-CRITICAL RULES:
-- duration must be INTEGER (minutes only, NOT "30 minutes", just 30)
-- distance must be FLOAT (km as number, NOT "5k", just 5.0)
-- Extract ONLY numeric values from duration/distance
-- If user says "30 minutes", extract 30
-- If user says "5k" or "5km", extract 5.0
-- notes can be STRING (for additional info like incline, speed)
+STRENGTH EXERCISES:
+{"exercise": "bench press", "sets": 3, "reps": 12, "weight": 225, "unit": "lbs"}
+
+CARDIO EXERCISES:
+{"exercise": "treadmill", "duration": 30, "distance": 5.0, "notes": "intensity info here"}
+- duration: INTEGER (minutes only)
+- distance: FLOAT (km or miles as number)
+- notes: STRING capturing ALL intensity metrics (incline, speed, resistance, level, pace, heart rate, etc.)
+
+BODYWEIGHT EXERCISES:
+{"exercise": "push-ups", "sets": 4, "reps": 10}
+
+CRITICAL RULES FOR CARDIO:
+1. duration must be INTEGER (NOT "30 minutes", just 30)
+2. distance must be FLOAT (NOT "5k", just 5.0)
+3. Extract ALL intensity details into notes field:
+   - Incline/gradient (e.g., "incline 10")
+   - Speed (e.g., "speed 6.5 mph")
+   - Resistance level (e.g., "resistance level 8")
+   - Difficulty setting (e.g., "level 12")
+   - Pace (e.g., "pace 5:30/km")
+   - Heart rate zone (e.g., "HR zone 4")
+   - Any other intensity metrics mentioned
+4. Format notes as comma-separated: "incline 10, speed 3.5 mph, heart rate 145"
 
 For CHART_REQUEST, extract:
 - exercise name (if specified)
@@ -265,16 +279,23 @@ For CHART_REQUEST, extract:
 Return JSON:
 {
     "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "CHART_REQUEST",
-    "workout_data": [...],  // if LOG_WORKOUT
-    "chart_request": {"exercise": "...", "period": "..."}  // if CHART_REQUEST
+    "workout_data": [...],
+    "chart_request": {"exercise": "...", "period": "..."}
 }
 
-Examples:
-Input: "walked on treadmill for 30 minutes at incline 10"
-Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "treadmill", "duration": 30, "notes": "incline 10"}]}
+EXAMPLES:
 
-Input: "ran 10km"  
-Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "running", "distance": 10.0}]}"""
+Input: "walked on treadmill for 30 minutes at incline 10 and speed 3"
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "treadmill", "duration": 30, "notes": "incline 10, speed 3"}]}
+
+Input: "biked 45 minutes at resistance level 8"
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "bike", "duration": 45, "notes": "resistance level 8"}]}
+
+Input: "ran 10km at pace 5:30 per km on a hilly route"
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "running", "distance": 10.0, "notes": "pace 5:30/km, hilly route"}]}
+
+Input: "elliptical 20 minutes level 12 with intervals"
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "elliptical", "duration": 20, "notes": "level 12, intervals"}]}"""
                 },
                 {
                     "role": "user",
