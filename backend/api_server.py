@@ -252,75 +252,68 @@ Classify as:
   
 - ASK_QUESTION: User asking for recommendations or advice about FUTURE workouts
   Examples: "what should I bench?", "I want to do bench today", "give me my working sets"
-  Keywords: "should I", "what to do", "recommend", "plan", "want to", "going to"
 
-- WORKOUT_SUMMARY: User requesting summary/recap/review of COMPLETED workout
-  This includes ANY request to see what they've logged or done
-  Examples: 
-  - "give me my workout summary"
-  - "what did I do today?"
-  - "show me my workout"
-  - "recap my session"
-  - "what exercises did I log?"
-  - "tell me what I've done"
-  - "how was my workout?"
-  - "what did I accomplish?"
-  - "review my training"
-  - "show today's lifts"
-  - "what did I bench today?"
-  - "summarize my lifts"
-  - ANY variation asking to see/review/summarize completed exercises
-  Keywords: "what did I", "show me", "summary", "recap", "review", "tell me what", "accomplished"
+- WORKOUT_SUMMARY: User requesting summary/recap of COMPLETED workout
+  Examples: "show my workout", "what did I do today?", "recap my session"
+
+- STATS_QUERY: User asking for aggregated statistics/totals
+  Examples:
+  - "how many minutes of cardio did I do [period]?"
+  - "what's my total volume [period]?"
+  - "how much weight have I lifted [period]?"
+  - "total reps this week"
+  - "how many workouts this month?"
+  Keywords: "total", "how many", "how much", "sum", "aggregate"
   
-- CHART_REQUEST: User requesting visual progress charts/graphs
-  Examples: "show me a chart", "graph my progress", "plot my bench"
-  Keywords: "chart", "graph", "plot", "progress over time"
+- CHART_REQUEST: User requesting visual progress charts
+  Examples: "show me a chart", "graph my bench progress"
 
-WORKOUT SUMMARY vs ASK_QUESTION:
-- "What did I do?" → WORKOUT_SUMMARY (reviewing past)
-- "What should I do?" → ASK_QUESTION (planning future)
-- "Show me my workout" → WORKOUT_SUMMARY (reviewing)
-- "Give me a workout" → ASK_QUESTION (requesting plan)
+STATS_QUERY vs WORKOUT_SUMMARY:
+- "Show my workout" → WORKOUT_SUMMARY (list of exercises)
+- "Total volume lifted" → STATS_QUERY (calculated number)
+- "What did I do?" → WORKOUT_SUMMARY (recap)
+- "How much cardio?" → STATS_QUERY (minutes total)
 
 WORKOUT LOGGING RULES:
 1. ONLY LOG_WORKOUT if user states they COMPLETED/DID the workout
-2. Past tense: "did", "completed", "finished", "just did"
+2. Past tense: "did", "completed", "finished"
 3. If just numbers/weight → continuing current exercise
 
 CONTEXT HANDLING:
-- If no exercise name given but has weight/reps → return workout_data WITHOUT exercise field
-- Backend fills in current_exercise from session
+- If no exercise name → return workout_data WITHOUT exercise field
+- Backend fills in current_exercise
 
-STRENGTH: {"exercise": "bench press", "reps": 12, "weight": 225, "unit": "lbs"}
+STRENGTH: {"exercise": "bench", "reps": 12, "weight": 225, "unit": "lbs"}
 CARDIO: {"exercise": "treadmill", "duration": 30, "notes": "incline 10"}
 BODYWEIGHT: {"exercise": "push-ups", "sets": 4, "reps": 10}
 
 Return JSON:
 {
-    "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "WORKOUT_SUMMARY" | "CHART_REQUEST",
+    "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "WORKOUT_SUMMARY" | "STATS_QUERY" | "CHART_REQUEST",
     "workout_data": [...],
-    "chart_request": {"exercise": "...", "period": "..."},
-    "summary_request": {"period": "today" | "week"}
+    "summary_request": {"period": "today" | "week"},
+    "stats_request": {"metric": "cardio_minutes" | "total_volume" | "total_reps", "period": "today" | "week" | "month" | "year"},
+    "chart_request": {"exercise": "...", "period": "..."}
 }
 
 EXAMPLES:
 
-Input: "What did I do for bench today?"
+Input: "How many minutes of cardio did I do this year?"
+Output: {"intent": "STATS_QUERY", "stats_request": {"metric": "cardio_minutes", "period": "year"}}
+
+Input: "What's my total volume lifted this month?"
+Output: {"intent": "STATS_QUERY", "stats_request": {"metric": "total_volume", "period": "month"}}
+
+Input: "How much weight have I lifted this week?"
+Output: {"intent": "STATS_QUERY", "stats_request": {"metric": "total_volume", "period": "week"}}
+
+Input: "Total reps today"
+Output: {"intent": "STATS_QUERY", "stats_request": {"metric": "total_reps", "period": "today"}}
+
+Input: "Show my workout"
 Output: {"intent": "WORKOUT_SUMMARY", "summary_request": {"period": "today"}}
 
-Input: "Tell me what I accomplished"
-Output: {"intent": "WORKOUT_SUMMARY", "summary_request": {"period": "today"}}
-
-Input: "Review my training session"
-Output: {"intent": "WORKOUT_SUMMARY", "summary_request": {"period": "today"}}
-
-Input: "Show today's lifts"
-Output: {"intent": "WORKOUT_SUMMARY", "summary_request": {"period": "today"}}
-
-Input: "What should I bench?" 
-Output: {"intent": "ASK_QUESTION"}  ← Future planning, not summary
-
-Input: "I did bench press 225 for 5"
+Input: "I did bench 225 for 5"
 Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "bench press", "reps": 5, "weight": 225, "unit": "lbs"}]}"""
                 },
                 {
@@ -763,6 +756,87 @@ def chat():
             })
 
 
+
+        elif intent == 'STATS_QUERY':
+            # Get stats request details
+            stats_req = result.get('stats_request', {})
+            metric = stats_req.get('metric', 'total_volume')
+            period = stats_req.get('period', 'week')
+            
+            # Determine date filter
+            if period == 'today':
+                date_filter = "w.date = CURRENT_DATE"
+            elif period == 'yesterday':
+                date_filter = "w.date = CURRENT_DATE - 1"
+            elif period == 'week':
+                date_filter = "w.date >= CURRENT_DATE - 7"
+            elif period == 'month':
+                date_filter = "w.date >= CURRENT_DATE - 30"
+            elif period == 'year':
+                date_filter = "w.date >= CURRENT_DATE - 365"
+            else:
+                date_filter = "w.date >= CURRENT_DATE - 7"
+            
+            conn = get_db_connection()
+            cur = conn.cursor()
+            
+            try:
+                if metric == 'cardio_minutes':
+                    # Calculate total cardio minutes
+                    cur.execute(f"""
+                        SELECT COALESCE(SUM(e.duration), 0) as total_minutes
+                        FROM exercises e
+                        JOIN workouts w ON e.workout_id = w.id
+                        WHERE w.user_id = %s
+                          AND {date_filter}
+                          AND e.duration IS NOT NULL
+                    """, (user_id,))
+                    
+                    total = cur.fetchone()[0]
+                    msg = f"💪 Total cardio this {period}: **{total} minutes**"
+                    
+                elif metric == 'total_volume':
+                    # Calculate total volume (weight × reps × sets)
+                    cur.execute(f"""
+                        SELECT COALESCE(SUM(e.weight * e.reps * COALESCE(e.sets, 1)), 0) as total_volume
+                        FROM exercises e
+                        JOIN workouts w ON e.workout_id = w.id
+                        WHERE w.user_id = %s
+                          AND {date_filter}
+                          AND e.weight IS NOT NULL
+                          AND e.reps IS NOT NULL
+                    """, (user_id,))
+                    
+                    total = cur.fetchone()[0]
+                    msg = f"💪 Total volume lifted this {period}: **{total:,.0f} lbs**\n\nThat's a lot of iron moved, bro! 🏋️"
+                    
+                elif metric == 'total_reps':
+                    # Calculate total reps
+                    cur.execute(f"""
+                        SELECT COALESCE(SUM(e.reps * COALESCE(e.sets, 1)), 0) as total_reps
+                        FROM exercises e
+                        JOIN workouts w ON e.workout_id = w.id
+                        WHERE w.user_id = %s
+                          AND {date_filter}
+                          AND e.reps IS NOT NULL
+                    """, (user_id,))
+                    
+                    total = cur.fetchone()[0]
+                    msg = f"💪 Total reps this {period}: **{total:,}**"
+                    
+                else:
+                    msg = "Not sure what stat you're looking for, bro. Try asking for total volume, cardio minutes, or total reps!"
+                
+                save_message(user_id, 'assistant', msg, session_id)
+                return jsonify({
+                    "type": "answer",
+                    "message": msg
+                })
+                
+            finally:
+                cur.close()
+                conn.close()
+
         elif intent == 'WORKOUT_SUMMARY':
             # Get summary request details
             summary_req = result.get('summary_request', {})
@@ -853,6 +927,87 @@ def chat():
                 cur.close()
                 conn.close()
 
+
+
+        elif intent == 'STATS_QUERY':
+            # Get stats request details
+            stats_req = result.get('stats_request', {})
+            metric = stats_req.get('metric', 'total_volume')
+            period = stats_req.get('period', 'week')
+            
+            # Determine date filter
+            if period == 'today':
+                date_filter = "w.date = CURRENT_DATE"
+            elif period == 'yesterday':
+                date_filter = "w.date = CURRENT_DATE - 1"
+            elif period == 'week':
+                date_filter = "w.date >= CURRENT_DATE - 7"
+            elif period == 'month':
+                date_filter = "w.date >= CURRENT_DATE - 30"
+            elif period == 'year':
+                date_filter = "w.date >= CURRENT_DATE - 365"
+            else:
+                date_filter = "w.date >= CURRENT_DATE - 7"
+            
+            conn = get_db_connection()
+            cur = conn.cursor()
+            
+            try:
+                if metric == 'cardio_minutes':
+                    # Calculate total cardio minutes
+                    cur.execute(f"""
+                        SELECT COALESCE(SUM(e.duration), 0) as total_minutes
+                        FROM exercises e
+                        JOIN workouts w ON e.workout_id = w.id
+                        WHERE w.user_id = %s
+                          AND {date_filter}
+                          AND e.duration IS NOT NULL
+                    """, (user_id,))
+                    
+                    total = cur.fetchone()[0]
+                    msg = f"💪 Total cardio this {period}: **{total} minutes**"
+                    
+                elif metric == 'total_volume':
+                    # Calculate total volume (weight × reps × sets)
+                    cur.execute(f"""
+                        SELECT COALESCE(SUM(e.weight * e.reps * COALESCE(e.sets, 1)), 0) as total_volume
+                        FROM exercises e
+                        JOIN workouts w ON e.workout_id = w.id
+                        WHERE w.user_id = %s
+                          AND {date_filter}
+                          AND e.weight IS NOT NULL
+                          AND e.reps IS NOT NULL
+                    """, (user_id,))
+                    
+                    total = cur.fetchone()[0]
+                    msg = f"💪 Total volume lifted this {period}: **{total:,.0f} lbs**\n\nThat's a lot of iron moved, bro! 🏋️"
+                    
+                elif metric == 'total_reps':
+                    # Calculate total reps
+                    cur.execute(f"""
+                        SELECT COALESCE(SUM(e.reps * COALESCE(e.sets, 1)), 0) as total_reps
+                        FROM exercises e
+                        JOIN workouts w ON e.workout_id = w.id
+                        WHERE w.user_id = %s
+                          AND {date_filter}
+                          AND e.reps IS NOT NULL
+                    """, (user_id,))
+                    
+                    total = cur.fetchone()[0]
+                    msg = f"💪 Total reps this {period}: **{total:,}**"
+                    
+                else:
+                    msg = "Not sure what stat you're looking for, bro. Try asking for total volume, cardio minutes, or total reps!"
+                
+                save_message(user_id, 'assistant', msg, session_id)
+                return jsonify({
+                    "type": "answer",
+                    "message": msg
+                })
+                
+            finally:
+                cur.close()
+                conn.close()
 
         elif intent == 'WORKOUT_SUMMARY':
             # Get summary request details
