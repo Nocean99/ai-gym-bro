@@ -240,66 +240,81 @@ def classify_and_parse(user_input):
                     "role": "system",
                     "content": """You are a workout assistant that classifies user intent and parses workout data.
 
+CONTEXT AWARENESS:
+- User may be logging multiple sets of the same exercise
+- If user doesn't specify exercise name, check if they're continuing previous exercise
+- "225 for 8 reps" or "same weight for 5" = continuing current exercise
+- Use context to fill in missing exercise names
+
 CRITICAL: Only log workouts that were COMPLETED (past tense). Never infer or make up data.
 
 Classify as:
 - LOG_WORKOUT: User explicitly states they COMPLETED a workout (past tense)
-  Examples: "I did 3 sets of bench", "just finished 5k run", "completed 225x5 squats"
+  Examples: 
+  - "I did 3 sets of bench" 
+  - "just finished 5k run"
+  - "225 for 8 reps" (continuing current exercise)
+  - "same weight for 5" (continuing current exercise)
+  - "just did my final set"
   
-- ASK_QUESTION: User asking for recommendations or advice (future tense or questions)
+- ASK_QUESTION: User asking for recommendations or advice
   Examples: "what should I bench?", "I want to do bench today", "give me my working sets"
   
 - CHART_REQUEST: User requesting progress charts
-  Examples: "show me my bench progress", "chart my squats"
 
 WORKOUT LOGGING RULES:
-1. ONLY classify as LOG_WORKOUT if user explicitly states they COMPLETED/DID the workout
-2. Past tense indicators: "did", "completed", "finished", "just did", "logged"
-3. NEVER create workout_data for future intentions ("I want to", "I'm going to", "planning to")
-4. If asking WHAT to do → ASK_QUESTION (no workout_data)
-5. If stating what they DID → LOG_WORKOUT (with workout_data)
+1. ONLY classify as LOG_WORKOUT if user states they COMPLETED/DID the workout
+2. Past tense: "did", "completed", "finished", "just did"
+3. If just numbers/weight without exercise name → assume continuing current exercise
+4. "same weight", "another set", "final set" → continuing current exercise
+5. If asking WHAT to do → ASK_QUESTION (no workout_data)
 
-NEVER MAKE UP OR INFER DATA:
-- If user doesn't specify weight → DO NOT infer it
-- If user doesn't specify reps → DO NOT infer it  
-- If asking for recommendations → Return ASK_QUESTION with NO workout_data
-- workout_data must ONLY contain explicitly stated information
+CONTEXT HANDLING:
+- If no exercise name given but has weight/reps → return workout_data WITHOUT exercise field
+- Backend will fill in current_exercise from session context
+- Examples:
+  - "225 for 8 reps" → [{"reps": 8, "weight": 225, "unit": "lbs"}]
+  - "same weight for 5" → [{"reps": 5}]
+  - "just did my final set, 10 reps" → [{"reps": 10}]
 
-STRENGTH EXERCISES (past tense only):
+NEVER MAKE UP DATA:
+- Only include explicitly stated values
+- Don't infer exercise names unless clearly stated
+- Don't infer weights/reps
+
+STRENGTH EXERCISES:
 {"exercise": "bench press", "sets": 3, "reps": 12, "weight": 225, "unit": "lbs"}
+OR (if continuing): {"reps": 12, "weight": 225, "unit": "lbs"}
 
-CARDIO EXERCISES (past tense only):
+CARDIO EXERCISES:
 {"exercise": "treadmill", "duration": 30, "distance": 5.0, "notes": "incline 10, speed 3"}
-- duration: INTEGER (minutes)
-- distance: FLOAT (km/miles)
-- notes: ALL intensity details (incline, speed, resistance, level, pace, HR, etc.)
 
-BODYWEIGHT EXERCISES (past tense only):
+BODYWEIGHT:
 {"exercise": "push-ups", "sets": 4, "reps": 10}
 
 Return JSON:
 {
     "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "CHART_REQUEST",
-    "workout_data": [...],  // ONLY if LOG_WORKOUT and data explicitly stated
+    "workout_data": [...],
     "chart_request": {"exercise": "...", "period": "..."}
 }
 
 EXAMPLES:
 
-Input: "I want to do bench press today, what weight should I use?"
-Output: {"intent": "ASK_QUESTION"}  ← NO workout_data!
+Input: "I did bench press 225 for 5 reps"
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "bench press", "reps": 5, "weight": 225, "unit": "lbs"}]}
 
-Input: "Give me my working sets for bench"
-Output: {"intent": "ASK_QUESTION"}  ← NO workout_data!
+Input: "225 for 8 reps" (continuing bench press)
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"reps": 8, "weight": 225, "unit": "lbs"}]}
 
-Input: "I did 3 sets of bench at 225 for 5 reps"
-Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "bench press", "sets": 3, "reps": 5, "weight": 225, "unit": "lbs"}]}
+Input: "same weight for 5" (continuing)
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"reps": 5}]}
 
-Input: "Just finished 30 minutes on treadmill at incline 10"
-Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "treadmill", "duration": 30, "notes": "incline 10"}]}
+Input: "just did my final set, 10 reps at 225"
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"reps": 10, "weight": 225, "unit": "lbs"}]}
 
-Input: "Ran 10km this morning"
-Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "running", "distance": 10.0}]}"""
+Input: "I want to do bench press today"
+Output: {"intent": "ASK_QUESTION"}"""
                 },
                 {
                     "role": "user",
@@ -692,6 +707,12 @@ def chat():
             if current_exercise or (parsed and parsed[0].get('exercise')):
                 exercise_name = current_exercise or parsed[0].get('exercise')
                 update_session_exercise(session_id, exercise_name)
+
+            # Fill in missing exercise names from session context
+            for exercise_data in parsed:
+                if not exercise_data.get('exercise') and exercise_name:
+                    exercise_data['exercise'] = exercise_name
+
 
             # Compare performance before saving
             performance = compare_performance(user_id, parsed)
