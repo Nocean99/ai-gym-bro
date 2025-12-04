@@ -462,7 +462,12 @@ def get_celebration_response(workout_data, performance_comparison=None):
             if ex.get('sets') and ex.get('reps') and ex.get('weight'):
                 workout_summary.append(f"{ex['exercise']}: {ex['sets']}x{ex['reps']} @ {ex['weight']} {ex.get('unit', 'lbs')}")
             elif ex.get('duration'):
-                workout_summary.append(f"{ex['exercise']}: {ex['duration']} min")
+                line = f"{ex['exercise']}: {ex['duration']} min"
+                if ex.get('distance'):
+                    line += f", {ex['distance']} km"
+                if ex.get('notes'):
+                    line += f" ({ex['notes']})"
+                workout_summary.append(line)
             else:
                 workout_summary.append(f"{ex['exercise']}")
         
