@@ -242,79 +242,86 @@ def classify_and_parse(user_input):
 
 CONTEXT AWARENESS:
 - User may be logging multiple sets of the same exercise
-- If user doesn't specify exercise name, check if they're continuing previous exercise
-- "225 for 8 reps" or "same weight for 5" = continuing current exercise
-- Use context to fill in missing exercise names
+- If user doesn't specify exercise name, assume continuing current exercise
 
 CRITICAL: Only log workouts that were COMPLETED (past tense). Never infer or make up data.
 
 Classify as:
 - LOG_WORKOUT: User explicitly states they COMPLETED a workout (past tense)
-  Examples: 
-  - "I did 3 sets of bench" 
-  - "just finished 5k run"
-  - "225 for 8 reps" (continuing current exercise)
-  - "same weight for 5" (continuing current exercise)
-  - "just did my final set"
+  Examples: "I did 3 sets of bench", "225 for 8 reps", "just finished 5k run"
   
-- ASK_QUESTION: User asking for recommendations or advice
+- ASK_QUESTION: User asking for recommendations or advice about FUTURE workouts
   Examples: "what should I bench?", "I want to do bench today", "give me my working sets"
+  Keywords: "should I", "what to do", "recommend", "plan", "want to", "going to"
+
+- WORKOUT_SUMMARY: User requesting summary/recap/review of COMPLETED workout
+  This includes ANY request to see what they've logged or done
+  Examples: 
+  - "give me my workout summary"
+  - "what did I do today?"
+  - "show me my workout"
+  - "recap my session"
+  - "what exercises did I log?"
+  - "tell me what I've done"
+  - "how was my workout?"
+  - "what did I accomplish?"
+  - "review my training"
+  - "show today's lifts"
+  - "what did I bench today?"
+  - "summarize my lifts"
+  - ANY variation asking to see/review/summarize completed exercises
+  Keywords: "what did I", "show me", "summary", "recap", "review", "tell me what", "accomplished"
   
-- CHART_REQUEST: User requesting progress charts
+- CHART_REQUEST: User requesting visual progress charts/graphs
+  Examples: "show me a chart", "graph my progress", "plot my bench"
+  Keywords: "chart", "graph", "plot", "progress over time"
+
+WORKOUT SUMMARY vs ASK_QUESTION:
+- "What did I do?" → WORKOUT_SUMMARY (reviewing past)
+- "What should I do?" → ASK_QUESTION (planning future)
+- "Show me my workout" → WORKOUT_SUMMARY (reviewing)
+- "Give me a workout" → ASK_QUESTION (requesting plan)
 
 WORKOUT LOGGING RULES:
-1. ONLY classify as LOG_WORKOUT if user states they COMPLETED/DID the workout
+1. ONLY LOG_WORKOUT if user states they COMPLETED/DID the workout
 2. Past tense: "did", "completed", "finished", "just did"
-3. If just numbers/weight without exercise name → assume continuing current exercise
-4. "same weight", "another set", "final set" → continuing current exercise
-5. If asking WHAT to do → ASK_QUESTION (no workout_data)
+3. If just numbers/weight → continuing current exercise
 
 CONTEXT HANDLING:
 - If no exercise name given but has weight/reps → return workout_data WITHOUT exercise field
-- Backend will fill in current_exercise from session context
-- Examples:
-  - "225 for 8 reps" → [{"reps": 8, "weight": 225, "unit": "lbs"}]
-  - "same weight for 5" → [{"reps": 5}]
-  - "just did my final set, 10 reps" → [{"reps": 10}]
+- Backend fills in current_exercise from session
 
-NEVER MAKE UP DATA:
-- Only include explicitly stated values
-- Don't infer exercise names unless clearly stated
-- Don't infer weights/reps
-
-STRENGTH EXERCISES:
-{"exercise": "bench press", "sets": 3, "reps": 12, "weight": 225, "unit": "lbs"}
-OR (if continuing): {"reps": 12, "weight": 225, "unit": "lbs"}
-
-CARDIO EXERCISES:
-{"exercise": "treadmill", "duration": 30, "distance": 5.0, "notes": "incline 10, speed 3"}
-
-BODYWEIGHT:
-{"exercise": "push-ups", "sets": 4, "reps": 10}
+STRENGTH: {"exercise": "bench press", "reps": 12, "weight": 225, "unit": "lbs"}
+CARDIO: {"exercise": "treadmill", "duration": 30, "notes": "incline 10"}
+BODYWEIGHT: {"exercise": "push-ups", "sets": 4, "reps": 10}
 
 Return JSON:
 {
-    "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "CHART_REQUEST",
+    "intent": "LOG_WORKOUT" | "ASK_QUESTION" | "WORKOUT_SUMMARY" | "CHART_REQUEST",
     "workout_data": [...],
-    "chart_request": {"exercise": "...", "period": "..."}
+    "chart_request": {"exercise": "...", "period": "..."},
+    "summary_request": {"period": "today" | "week"}
 }
 
 EXAMPLES:
 
-Input: "I did bench press 225 for 5 reps"
-Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "bench press", "reps": 5, "weight": 225, "unit": "lbs"}]}
+Input: "What did I do for bench today?"
+Output: {"intent": "WORKOUT_SUMMARY", "summary_request": {"period": "today"}}
 
-Input: "225 for 8 reps" (continuing bench press)
-Output: {"intent": "LOG_WORKOUT", "workout_data": [{"reps": 8, "weight": 225, "unit": "lbs"}]}
+Input: "Tell me what I accomplished"
+Output: {"intent": "WORKOUT_SUMMARY", "summary_request": {"period": "today"}}
 
-Input: "same weight for 5" (continuing)
-Output: {"intent": "LOG_WORKOUT", "workout_data": [{"reps": 5}]}
+Input: "Review my training session"
+Output: {"intent": "WORKOUT_SUMMARY", "summary_request": {"period": "today"}}
 
-Input: "just did my final set, 10 reps at 225"
-Output: {"intent": "LOG_WORKOUT", "workout_data": [{"reps": 10, "weight": 225, "unit": "lbs"}]}
+Input: "Show today's lifts"
+Output: {"intent": "WORKOUT_SUMMARY", "summary_request": {"period": "today"}}
 
-Input: "I want to do bench press today"
-Output: {"intent": "ASK_QUESTION"}"""
+Input: "What should I bench?" 
+Output: {"intent": "ASK_QUESTION"}  ← Future planning, not summary
+
+Input: "I did bench press 225 for 5"
+Output: {"intent": "LOG_WORKOUT", "workout_data": [{"exercise": "bench press", "reps": 5, "weight": 225, "unit": "lbs"}]}"""
                 },
                 {
                     "role": "user",
@@ -749,6 +756,168 @@ def chat():
                 "performance": performance,
                 "session_id": session_id
             })
+
+
+        elif intent == 'WORKOUT_SUMMARY':
+            # Get summary request details
+            summary_req = result.get('summary_request', {})
+            period = summary_req.get('period', 'today')
+            
+            # Determine days to look back
+            if period == 'today':
+                days_back = 1
+            elif period == 'week':
+                days_back = 7
+            else:
+                days_back = 1
+            
+            # Get workout data from database
+            conn = get_db_connection()
+            cur = conn.cursor()
+            
+            try:
+                cur.execute("""
+                    SELECT e.exercise_name, e.sets, e.reps, e.weight, e.unit,
+                           e.duration, e.distance, e.notes, e.created_at
+                    FROM exercises e
+                    JOIN workouts w ON e.workout_id = w.id
+                    WHERE w.user_id = %s
+                      AND w.date >= CURRENT_DATE - INTERVAL '%s days'
+                    ORDER BY e.created_at ASC
+                """, (user_id, days_back))
+                
+                exercises = cur.fetchall()
+                
+                if not exercises:
+                    msg = f"No workouts logged in the past {period}. Let's get after it! 💪"
+                    save_message(user_id, 'assistant', msg, session_id)
+                    return jsonify({
+                        "type": "answer",
+                        "message": msg
+                    })
+                
+                # Format the summary
+                summary_lines = [f"**Workout Summary - {period.title()}:**\n"]
+                
+                for ex in exercises:
+                    exercise_name, sets, reps, weight, unit, duration, distance, notes, created = ex
+                    
+                    if weight and reps:  # Strength exercise
+                        if sets:
+                            summary_lines.append(f"• {exercise_name}: {sets}x{reps} @ {weight} {unit}")
+                        else:
+                            summary_lines.append(f"• {exercise_name}: {reps} reps @ {weight} {unit}")
+                    elif duration:  # Cardio with duration
+                        line = f"• {exercise_name}: {duration} min"
+                        if distance:
+                            line += f", {distance} km"
+                        if notes:
+                            line += f" ({notes})"
+                        summary_lines.append(line)
+                    elif distance:  # Cardio with distance
+                        line = f"• {exercise_name}: {distance} km"
+                        if notes:
+                            line += f" ({notes})"
+                        summary_lines.append(line)
+                    elif reps:  # Bodyweight
+                        if sets:
+                            summary_lines.append(f"• {exercise_name}: {sets}x{reps}")
+                        else:
+                            summary_lines.append(f"• {exercise_name}: {reps} reps")
+                
+                summary = "\n".join(summary_lines)
+                summary += "\n\nKeep crushing it, bro! 💪"
+                
+                save_message(user_id, 'assistant', summary, session_id)
+                return jsonify({
+                    "type": "answer",
+                    "message": summary
+                })
+                
+            finally:
+                cur.close()
+                conn.close()
+
+
+        elif intent == 'WORKOUT_SUMMARY':
+            # Get summary request details
+            summary_req = result.get('summary_request', {})
+            period = summary_req.get('period', 'today')
+            
+            # Determine days to look back
+            if period == 'today':
+                days_back = 1
+            elif period == 'week':
+                days_back = 7
+            else:
+                days_back = 1
+            
+            # Get workout data from database
+            conn = get_db_connection()
+            cur = conn.cursor()
+            
+            try:
+                cur.execute("""
+                    SELECT e.exercise_name, e.sets, e.reps, e.weight, e.unit,
+                           e.duration, e.distance, e.notes, e.created_at
+                    FROM exercises e
+                    JOIN workouts w ON e.workout_id = w.id
+                    WHERE w.user_id = %s
+                      AND w.date >= CURRENT_DATE - INTERVAL '%s days'
+                    ORDER BY e.created_at ASC
+                """, (user_id, days_back))
+                
+                exercises = cur.fetchall()
+                
+                if not exercises:
+                    msg = f"No workouts logged in the past {period}. Let's get after it! 💪"
+                    save_message(user_id, 'assistant', msg, session_id)
+                    return jsonify({
+                        "type": "answer",
+                        "message": msg
+                    })
+                
+                # Format the summary
+                summary_lines = [f"**Workout Summary - {period.title()}:**\n"]
+                
+                for ex in exercises:
+                    exercise_name, sets, reps, weight, unit, duration, distance, notes, created = ex
+                    
+                    if weight and reps:  # Strength exercise
+                        if sets:
+                            summary_lines.append(f"• {exercise_name}: {sets}x{reps} @ {weight} {unit}")
+                        else:
+                            summary_lines.append(f"• {exercise_name}: {reps} reps @ {weight} {unit}")
+                    elif duration:  # Cardio with duration
+                        line = f"• {exercise_name}: {duration} min"
+                        if distance:
+                            line += f", {distance} km"
+                        if notes:
+                            line += f" ({notes})"
+                        summary_lines.append(line)
+                    elif distance:  # Cardio with distance
+                        line = f"• {exercise_name}: {distance} km"
+                        if notes:
+                            line += f" ({notes})"
+                        summary_lines.append(line)
+                    elif reps:  # Bodyweight
+                        if sets:
+                            summary_lines.append(f"• {exercise_name}: {sets}x{reps}")
+                        else:
+                            summary_lines.append(f"• {exercise_name}: {reps} reps")
+                
+                summary = "\n".join(summary_lines)
+                summary += "\n\nKeep crushing it, bro! 💪"
+                
+                save_message(user_id, 'assistant', summary, session_id)
+                return jsonify({
+                    "type": "answer",
+                    "message": summary
+                })
+                
+            finally:
+                cur.close()
+                conn.close()
 
         elif intent == 'CHART_REQUEST':
             chart_req = result.get('chart_request', {})
