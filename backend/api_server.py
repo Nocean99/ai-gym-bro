@@ -776,15 +776,25 @@ def chat():
             cur = conn.cursor()
             
             try:
-                cur.execute("""
+                # Build date filter based on period
+                if period == 'today':
+                    date_filter = "w.date = CURRENT_DATE"
+                elif period == 'yesterday':
+                    date_filter = "w.date = CURRENT_DATE - 1"
+                elif period == 'week':
+                    date_filter = "w.date >= CURRENT_DATE - 7"
+                else:
+                    date_filter = "w.date = CURRENT_DATE"
+                
+                cur.execute(f"""
                     SELECT e.exercise_name, e.sets, e.reps, e.weight, e.unit,
                            e.duration, e.distance, e.notes, e.created_at
                     FROM exercises e
                     JOIN workouts w ON e.workout_id = w.id
                     WHERE w.user_id = %s
-                      AND w.date >= CURRENT_DATE - INTERVAL '%s days'
+                      AND {date_filter}
                     ORDER BY e.created_at ASC
-                """, (user_id, days_back))
+                """, (user_id,))
                 
                 exercises = cur.fetchall()
                 
@@ -857,15 +867,25 @@ def chat():
             cur = conn.cursor()
             
             try:
-                cur.execute("""
+                # Build date filter based on period
+                if period == 'today':
+                    date_filter = "w.date = CURRENT_DATE"
+                elif period == 'yesterday':
+                    date_filter = "w.date = CURRENT_DATE - 1"
+                elif period == 'week':
+                    date_filter = "w.date >= CURRENT_DATE - 7"
+                else:
+                    date_filter = "w.date = CURRENT_DATE"
+                
+                cur.execute(f"""
                     SELECT e.exercise_name, e.sets, e.reps, e.weight, e.unit,
                            e.duration, e.distance, e.notes, e.created_at
                     FROM exercises e
                     JOIN workouts w ON e.workout_id = w.id
                     WHERE w.user_id = %s
-                      AND w.date >= CURRENT_DATE - INTERVAL '%s days'
+                      AND {date_filter}
                     ORDER BY e.created_at ASC
-                """, (user_id, days_back))
+                """, (user_id,))
                 
                 exercises = cur.fetchall()
                 
