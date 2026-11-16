@@ -1,8 +1,10 @@
+import os
+
 from openai import OpenAI
 import json
 
-# Set your API key here
-client = OpenAI(api_key="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")
+# Read the API key from the environment; never hard-code it
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 # Test workout descriptions (how real people would describe workouts)
 test_workouts = [
